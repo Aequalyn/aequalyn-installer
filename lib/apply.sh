@@ -151,7 +151,7 @@ if [[ $OFFLINE -eq 1 ]]; then
     # Check the bundled package files directly instead.
     FILTERED=()
     for p in $(printf '%s\n' "${PKGS[@]}" | grep -v '^$' | sort -u); do
-        if compgen -G "$OFFLINE_REPO/${p}-*.pkg.tar.zst" >/dev/null; then
+        if compgen -G "$OFFLINE_REPO/${p}-[0-9]*.pkg.tar.zst" >/dev/null; then
             FILTERED+=("$p")
         else
             warn "dropping $p (not in offline repo)"
@@ -538,8 +538,8 @@ ok "system configured"
 
 # ---------------------------------------------------------- Aequalyn files -------
 info "installing the Aequalyn desktop ..."
-UID_T=$(id -u "$USERNAME" 2>/dev/null || echo 1000)
-GID_T=$(id -g "$USERNAME" 2>/dev/null || echo 1000)
+UID_T=$(arch-chroot /mnt id -u "$USERNAME" 2>/dev/null || awk -F: -v u="$USERNAME" '$1==u{print $3; exit}' /mnt/etc/passwd 2>/dev/null || echo 1000)
+GID_T=$(arch-chroot /mnt id -g "$USERNAME" 2>/dev/null || awk -F: -v u="$USERNAME" '$1==u{print $4; exit}' /mnt/etc/passwd 2>/dev/null || echo 1000)
 mkdir -p "/mnt/home/$USERNAME"
 bash "$AEQUALYN_ROOT/install.sh" --target "/mnt/home/$USERNAME" --owner "$UID_T:$GID_T"
 # install.sh sees the live-ISO mount path; rewrite it for the installed system.
