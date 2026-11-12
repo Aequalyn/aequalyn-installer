@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# aequalyn-detect -- L1 hardware detection + profile proposal (no AI required).
+#
+# Reads /sys and lsblk only, so it works in the live ISO with no extra tools.
+#   aequalyn-detect            pretty human-readable summary
+#   aequalyn-detect --shell    KEY=value lines (safe to eval)
+#   aequalyn-detect --toml     write a proposed install.toml to stdout
+#   aequalyn-detect --json     machine-readable JSON (python3)
+set -euo pipefail
+
+OUT=${1:-pretty}
+
+read_first() { local f=$1; [[ -r "$f" ]] && head -1 "$f" 2>/dev/null || true; }
+
+# --- CPU --------------------------------------------------------------------
+cpu_vendor=$(awk -F: '/vendor_id/{gsub(/^[ \t]+/,"",$2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)
+[[ -z "$cpu_vendor" ]] && cpu_vendor="unknown"
+cpu_model=$(awk -F: '/model name/{gsub(/^[ \t]+/,"",$2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)
+
+# --- GPU --------------------------------------------------------------------
+gpu_vendors=""
+for v in /sys/class/drm/card*/device/vendor; do
+    [[ -r "$v" ]] || continue
+    id=$(cat "$v" 2>/dev/null || true)
+    case "$id" in
+        0x10de) gpu_vendors="${gpu_vendors:+$gpu_vendors,}nvidia" ;;
+        0x1002) gpu_vendors="${gpu_vendors:+$gpu_vendors,}amd" ;;
+        0x8086) gpu_vendors="${gpu_vendors:+$gpu_vendors,}intel" ;;
+    esac
+done
+[[ -z "$gpu_vendors" ]] && gpu_vendors="unknown"
+
+# --- Memory / firmware ------------------------------------------------------
+mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+mem_gb=$(( (mem_kb + 1048575) / 1048576 ))
+[[ -d /sys/firmware/efi ]] && firmware="uefi" || firmware="bios"
+ncpus=$(nproc 2>/dev/null || echo 1)
+
+# --- Laptop -----------------------------------------------------------------
+battery="no"
+for b in /sys/class/power_supply/BAT*; do [[ -d "$b" ]] && battery="yes" && break; done
+
+# --- Disks ------------------------------------------------------------------
+boot_source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+boot_disk=""
+if [[ -n "$boot_source" ]]; then
+    dev="$boot_source"
+    while :; do
+        parent=$(lsblk -dno PKNAME "$dev" 2>/dev/null | tail -1 || true)
+        [[ -n "$parent" ]] || break
+        dev="/dev/$parent"
+    done
+    boot_disk="$dev"
+fi
+disks=()
+disk_sizes=()
+while IFS='|' read -r name size; do
+    [[ -z "$name" ]] && continue
+    [[ "$name" == "$boot_disk" ]] && continue
+    disks+=("$name")
+    disk_sizes+=("$size")
+done < <(lsblk -dpno NAME,SIZE 2>/dev/null | tr -s ' ' '|' \
+            | grep -E '^/dev/(sd|hd|vd|nvme|mmcblk|xv)' || true)
+disk_count=${#disks[@]}
+first_disk=${disks[0]:-}
+first_size=${disk_sizes[0]:-}
+
+# --- Windows EFI + free space -----------------------------------------------
+win_efi=""
+for p in $(blkid -t TYPE=vfat -o device 2>/dev/null || true); do
+    mp=$(mktemp -d)
+    if mount -o ro "$p" "$mp" 2>/dev/null; then
+        [[ -d "$mp/EFI/Microsoft" ]] && win_efi="$p"
+        umount "$mp" 2>/dev/null || true
+    fi
+    rmdir "$mp" 2>/dev/null || true
+    [[ -n "$win_efi" ]] && break
+done
+
+free_gb=0
+if [[ -n "$first_disk" ]] && command -v parted >/dev/null 2>&1; then
+    free_b=$(parted -m "$first_disk" unit B print free 2>/dev/null | \
+        awk -F: '$NF ~ /free/ {gsub(/B/,"",$4); if ($4+0>m+0) m=$4+0} END{printf "%.0f", m+0}' || echo 0)
+    free_gb=$(( free_b / 1073741824 ))
+fi
+
+# --- Microcode / GPU packages ------------------------------------------------
+ucode="intel-ucode"
+[[ "$cpu_vendor" == "AuthenticAMD" ]] && ucode="amd-ucode"
+gpu_pkgs=""
+case "$gpu_vendors" in
+    *nvidia*) gpu_pkgs="nvidia-open nvidia-utils" ;;
+    *amd*)    gpu_pkgs="mesa vulkan-radeon" ;;
+    *intel*)  gpu_pkgs="mesa vulkan-intel" ;;
+    *)        gpu_pkgs="mesa" ;;
+esac
+
+# --- L1 proposal -------------------------------------------------------------
+profiles=(minimal)
+(( mem_gb >= 16 )) && profiles+=(dev)
+[[ "$gpu_vendors" == *nvidia* || "$gpu_vendors" == *amd* ]] && (( free_gb >= 100 )) && profiles+=(gaming)
+[[ "$battery" == "yes" ]] && profiles+=(student)
+encrypt=false
+[[ "$battery" == "yes" ]] && encrypt=true
+mode=fullwipe
+[[ -n "$win_efi" ]] && mode=dualboot
+browser=chromium
+flatpak=false
+
+profile_str=$(printf '"%s",' "${profiles[@]}" | sed 's/,$//')
+profile_str="[$profile_str]"
+
+case "$OUT" in
+    --shell)
+        printf 'CPU_VENDOR=%q\nCPU_MODEL=%q\nGPU_VENDORS=%q\nMEM_GB=%q\nFIRMWARE=%q\nCPUS=%q\nBATTERY=%q\n' \
+            "$cpu_vendor" "$cpu_model" "$gpu_vendors" "$mem_gb" "$firmware" "$ncpus" "$battery"
+        printf 'DISK_COUNT=%q\nFIRST_DISK=%q\nFIRST_SIZE=%q\nBOOT_DISK=%q\nWIN_EFI=%q\nFREE_GB=%q\n' \
+            "$disk_count" "$first_disk" "$first_size" "$boot_disk" "$win_efi" "$free_gb"
+        printf 'UCODE=%q\nGPU_PKGS=%q\nPROFILES=%q\nENCRYPT=%q\nMODE=%q\nBROWSER=%q\nFLATPAK=%q\n' \
+            "$ucode" "$gpu_pkgs" "${profiles[*]}" "$encrypt" "$mode" "$browser" "$flatpak"
+        ;;
+    --json)
+        python3 - "$cpu_vendor" "$gpu_vendors" "$mem_gb" "$firmware" "$battery" \
+                  "$disk_count" "$first_disk" "$win_efi" "$free_gb" "$ucode" \
+                  "${profiles[*]}" "$encrypt" "$mode" <<'PY'
+import json, sys
+keys = ["cpu_vendor","gpu_vendors","mem_gb","firmware","battery","disk_count",
+        "first_disk","win_efi","free_gb","ucode","profiles","encrypt","mode"]
+vals = list(sys.argv[1:])
+vals[2] = int(vals[2]); vals[5] = int(vals[5]); vals[8] = int(vals[8])
+vals[10] = vals[10].split()
+vals[11] = vals[11] == "true"
+print(json.dumps(dict(zip(keys, vals)), indent=2))
+PY
+        ;;
+    --toml)
+        cat <<EOF
+# Proposed by aequalyn-detect (L1). Review and edit before running aequalyn-install.
+version = 1
+
+[system]
+hostname    = "aequalyn"
+username    = "user"
+locale      = "en_US.UTF-8"
+keymap      = "us"
+timezone    = "UTC"
+password_set = false
+
+[disk]
+device      = "$first_disk"
+mode        = "$mode"
+filesystem  = "btrfs"
+encrypt     = $encrypt
+efi_size_mb = 512
+free_start  = ""
+free_end    = ""
+
+[boot]
+bootloader        = "limine"
+chainload_windows = $([[ -n "$win_efi" ]] && echo true || echo false)
+kernels           = ["linux"]
+
+[packages]
+source   = "auto"
+profiles = $profile_str
+browser  = "$browser"
+flatpak  = $flatpak
+extra    = []
+aur      = false
+
+[agent]
+level            = 1
+cloud_proposal   = false
+snapshot_before  = true
+
+[aequalyn]
+theme_mode  = "wallpaper"
+theme_apps  = true
+bar_height  = 32
+bar_opacity = 100
+profile     = "default"
+EOF
+        ;;
+    *)
+        cat <<EOF
+Aequalyn hardware detection (L1)
+----------------------------
+  Firmware        : $firmware
+  CPU             : $cpu_model ($cpu_vendor, $ncpus threads)
+  Microcode       : $ucode
+  GPU             : $gpu_vendors  -> $gpu_pkgs
+  Memory          : ${mem_gb} GiB
+  Laptop battery  : $battery
+  Disks (excl. USB): $disk_count   first: ${first_disk:-none} (${first_size:-?})
+  Free space      : ${free_gb} GiB
+  Windows EFI     : ${win_efi:-not found}
+
+Proposed profile
+----------------
+  Profiles        : ${profiles[*]}
+  Install mode    : $mode
+  Encryption      : $encrypt
+  Browser         : $browser
+  Flatpak         : $flatpak
+
+Run \`aequalyn-detect --toml > install.toml\` to save this proposal.
+EOF
+        ;;
+esac
