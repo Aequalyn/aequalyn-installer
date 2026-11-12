@@ -194,6 +194,15 @@ if [[ "$MODE" == "manual" ]]; then
     ok "manual layout: EFI=$EFI_DEV root=$ROOT_DEV"
 elif [[ "$MODE" == "fullwipe" ]]; then
     warn "ERASING ALL DATA ON $DISK"
+    # release the disk first: a previous, interrupted run may still have it mounted
+    umount -R /mnt 2>/dev/null || true
+    cryptsetup close aequalyn_root 2>/dev/null || true
+    for part in $(lsblk -lnpo NAME "$DISK" | tail -n +2); do
+        swapoff "$part" 2>/dev/null || true
+        umount -R "$part" 2>/dev/null || true
+    done
+    wipefs -a "$DISK" >/dev/null 2>&1 || true
+    partprobe "$DISK" 2>/dev/null || true; udevadm settle
     parted --script "$DISK" mklabel gpt
     parted --script "$DISK" mkpart primary fat32 1MiB "${EFI_MB}MiB"
     parted --script "$DISK" set 1 esp on
@@ -260,7 +269,7 @@ mount -o "$MOPTS,subvol=@log" "$ROOT_MAP" /mnt/var/log
 mount -o "$MOPTS,subvol=@pkg" "$ROOT_MAP" /mnt/var/cache/pacman/pkg
 mount -o "$MOPTS,subvol=@.snapshots" "$ROOT_MAP" /mnt/.snapshots
 
-mkfs.fat -F32 -n AEQUALYN_EFI "$EFI_DEV" >/dev/null
+mkfs.fat -F32 -n AEQUALYN "$EFI_DEV" >/dev/null
 udevadm settle
 mount "$EFI_DEV" /mnt/boot
 ok "filesystems ready (btrfs: ${SUBVOLS[*]})"
