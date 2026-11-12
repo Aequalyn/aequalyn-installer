@@ -1,0 +1,68 @@
+# Aequalyn install contract -- install.toml
+#
+# This is the single source of truth for an install. The agent (L1) proposes
+# it, the user sees it as a list of differences and approves or edits it, and
+# `aequalyn-install --config install.toml` applies it identically every time.
+# Nothing is executed until the user confirms.
+#
+# Copy to install.toml, edit, then run:  aequalyn-install --config install.toml
+
+version = 1
+
+[system]
+hostname    = "aequalyn"
+username    = "user"
+locale      = "en_US.UTF-8"
+keymap      = "us"
+timezone    = "Europe/Bucharest"
+# Set after the password prompt; never store the plaintext password here.
+password_set = false
+
+[disk]
+# /dev/... -- the installer refuses to touch the device the ISO booted from.
+device      = "/dev/nvme0n1"
+# "fullwipe" (erase disk) | "dualboot" (use largest free region) | "manual"
+mode        = "fullwipe"
+filesystem  = "btrfs"
+# LUKS2 root encryption. L1 defaults this to true on laptops.
+encrypt     = true
+efi_size_mb = 512
+# Optional: pre-detected free region for dualboot (filled by aequalyn-detect).
+free_start  = ""
+free_end    = ""
+# mode = "manual" uses these two pre-existing partitions instead of touching
+# the partition table. Leave empty for fullwipe/dualboot.
+efi_device  = ""
+root_device = ""
+
+[boot]
+bootloader       = "limine"
+# Chainload Windows Boot Manager when its EFI partition is found.
+chainload_windows = true
+kernels          = ["linux"]
+
+[packages]
+# "auto" = use the bundled offline repo when present, else online.
+source   = "auto"
+# Profiles are cumulative; "minimal" is always included.
+profiles = ["minimal", "dev"]
+browser  = "chromium"          # chromium | firefox | zen
+flatpak  = false
+# Explicit extra packages, applied after the profile union.
+extra    = []
+aur      = false               # build the optional AUR set post-install
+
+[agent]
+# L1: hardware detection + profile proposal. No model is bundled in the ISO.
+level            = 1
+# Optional cloud proposal (never required): set an API key at install time.
+cloud_proposal   = false
+snapshot_before  = true        # btrfs snapshot before any agent-driven change
+
+[aequalyn]
+theme_mode   = "wallpaper"     # wallpaper | theme | light
+theme_apps   = true
+bar_height   = 32
+bar_opacity  = 100
+# Profiles can be exported/imported so a reinstall restores the desktop.
+profile      = "default"
