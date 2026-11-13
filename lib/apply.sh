@@ -616,6 +616,16 @@ cp -r "$AEQUALYN_ROOT/." /mnt/usr/share/aequalyn/
 cp "$CONFIG" /mnt/etc/aequalyn/install.toml
 printf 'Aequalyn %s\n' "$(cat "$AEQUALYN_ROOT/VERSION" 2>/dev/null || echo 0.1.0)" > /mnt/etc/aequalyn/release
 
+# Installer tools live in /usr/local/bin on the target so the installed user can
+# run aequalyn-install / aequalyn-update / aequalyn-detect / aequalyn-repair
+# after the system is installed. (aequalyn-update pulls /usr/share/aequalyn and
+# re-applies dotfiles; see aequalyn-update --help.)
+mkdir -p /mnt/usr/local/bin
+for s in aequalyn-install aequalyn-update aequalyn-detect aequalyn-repair aequalyn-live-session; do
+    [[ -f "$AEQUALYN_ROOT/installer/$s" ]] && cp "$AEQUALYN_ROOT/installer/$s" "/mnt/usr/local/bin/$s"
+done
+chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
+
 # settings.json from [aequalyn] section
 python3 - "/mnt/home/$USERNAME/.config/aequalyn/settings.json" "$THEME_MODE" "$THEME_APPS" "$BAR_HEIGHT" "$BAR_OPACITY" <<'PY'
 import json, sys
