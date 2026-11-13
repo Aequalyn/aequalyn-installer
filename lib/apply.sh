@@ -574,6 +574,42 @@ d["appearance"].update(themeMode=sys.argv[2],
                        barOpacity=int(sys.argv[5]))
 open(p,"w").write(json.dumps(d, indent=2) + "\n")
 PY
+# No display manager: logging in on the first console starts the desktop,
+# the other consoles stay plain text (Ctrl+Alt+F2 for a rescue shell).
+BP="/mnt/home/$USERNAME/.bash_profile"
+[[ -f "$BP" ]] || printf '[[ -f ~/.bashrc ]] && . ~/.bashrc\n' > "$BP"
+if ! grep -q 'aequalyn: desktop on tty1' "$BP" 2>/dev/null; then
+    cat >> "$BP" <<'EOF'
+
+# aequalyn: desktop on tty1
+if [[ -z ${WAYLAND_DISPLAY:-} && ${XDG_VTNR:-0} -eq 1 ]] && command -v aequalyn-desktop >/dev/null; then
+    aequalyn-desktop
+fi
+EOF
+fi
+# Starts Hyprland; if it dies at once (a VM without 3D acceleration), retries
+# with software rendering, then without atomic modesetting. Returns to the
+# console if nothing works.
+# The desktop's own commands (aequalyn-session-start, the bar's helpers) live
+# in ~/.local/bin; Hyprland inherits PATH from the login shell.
+cat > /mnt/etc/profile.d/aequalyn-path.sh <<'EOF'
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+EOF
+cat > /mnt/usr/local/bin/aequalyn-desktop <<'EOF'
+#!/usr/bin/env bash
+export PATH="$HOME/.local/bin:$PATH"
+launch() {
+    if command -v start-hyprland >/dev/null 2>&1; then start-hyprland; else Hyprland; fi
+}
+t=$SECONDS; launch
+(( SECONDS - t < 15 )) || exit 0
+printf '\nThe desktop did not start with the GPU; trying software rendering...\n'
+t=$SECONDS; LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe launch
+(( SECONDS - t < 15 )) || exit 0
+printf '\nTrying without atomic modesetting...\n'
+AQ_NO_ATOMIC=1 LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe launch
+EOF
+chmod 755 /mnt/usr/local/bin/aequalyn-desktop
 chown -R "$UID_T:$GID_T" "/mnt/home/$USERNAME"
 
 # First-boot helper: AUR set + regenerate colours for the installed user.
