@@ -490,15 +490,30 @@ else
   printf 'TARGET_OS_NAME="Aequalyn Linux"\nESP_PATH="/boot"\n' > /etc/limine-snapper-sync.conf
 fi
 
+# limine-entry-tool cannot create kernel entries without a command line, and
+# the chroot has no usable /proc/cmdline. Without this file it only adds the
+# "EFI fallback" chainload entry, which is what used to force the flat menu
+# below. Write it before asking the tool to regenerate the boot entries.
+install -d -m 755 /etc/kernel
+printf '%s\n' "$CMDLINE" > /etc/kernel/cmdline
+chmod 644 /etc/kernel/cmdline
+
+# Do not keep limine.conf under EFI/limine or EFI/BOOT: Limine's search order
+# can prefer those copies, while limine-entry-tool only updates
+# /boot/limine.conf, leaving stale kernel entries after every update.
+rm -f /boot/EFI/limine/limine.conf /boot/EFI/BOOT/limine.conf
+
 # The stack's mkinitcpio hook writes the kernel entries, but mkinitcpio already
-# ran above, so run it once more now that the hook is installed.
-if [[ -f /etc/default/limine ]] && pacman -Q limine-mkinitcpio-hook >/dev/null 2>&1; then
-  mkinitcpio -P >/dev/null 2>&1 || true
+# ran above, so run limine-update once more now that the hook and the cmdline
+# are in place. This also refreshes the EFI binary and its fallback copy.
+if command -v limine-update >/dev/null 2>&1; then
+  limine-update >/dev/null 2>&1 || true
 fi
 
-# Own menu whenever no kernel entry exists: the AUR stack was unavailable, or
-# it only wrote its "EFI fallback" entry (which chainloads Limine itself).
+# Own menu whenever no kernel entry exists: the AUR stack was unavailable
+# (online installs build it on first boot), so keep the machine bootable.
 if ! grep -q 'protocol: linux' /boot/limine.conf 2>/dev/null; then
+  warn "limine-entry-tool did not create a kernel entry; writing a fallback menu"
   FB_IMG=initramfs-linux-fallback.img
   [[ -f /boot/$FB_IMG ]] || FB_IMG=initramfs-linux.img
   cat > /boot/limine.conf <<LIMEOF
@@ -527,8 +542,6 @@ if [[ -d /boot/EFI/Microsoft && "$CHAINLOAD" == "true" ]] \
     path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
 WEOF
 fi
-cp -f /boot/limine.conf /boot/EFI/limine/limine.conf
-cp -f /boot/limine.conf /boot/EFI/BOOT/limine.conf
 
 systemctl enable NetworkManager.service
 systemctl enable bluetooth.service
