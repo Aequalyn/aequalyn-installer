@@ -48,14 +48,15 @@ if [[ $DO_PULL -eq 1 ]]; then
 fi
 
 echo "==> fetching latest shell"
-SHELL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aequalyn/src/aequalyn-shell"
-if [[ -d "$SHELL_CACHE/.git" ]]; then
-    git -C "$SHELL_CACHE" pull --ff-only -q >/dev/null 2>&1 || true
+SHELL_DIR="$AQ_ROOT/shell"
+if [[ -d "$SHELL_DIR/.git" ]]; then
+    $SUDO git -C "$SHELL_DIR" pull --ff-only -q >/dev/null 2>&1 || true
 else
-    mkdir -p "$(dirname "$SHELL_CACHE")"
-    git clone -q --depth 1 https://github.com/Aequalyn/aequalyn-shell.git "$SHELL_CACHE" >/dev/null 2>&1 || true
+    # Legacy bundled copy: replace with a live clone so future updates track git.
+    $SUDO rm -rf "$SHELL_DIR"
+    $SUDO git clone -q --depth 1 https://github.com/Aequalyn/aequalyn-shell.git "$SHELL_DIR" >/dev/null 2>&1 || true
 fi
-export AEQUALYN_SHELL_DIR="$SHELL_CACHE"
+export AEQUALYN_SHELL_DIR="$SHELL_DIR"
 
 echo "==> re-applying dotfiles to $HOME (skipping .config/hypr)"
 bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
