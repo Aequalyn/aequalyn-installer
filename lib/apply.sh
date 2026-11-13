@@ -14,6 +14,7 @@ info() { printf '\033[0;34m  INFO\033[0m    %s\n' "$*"; }
 ok()   { printf '\033[0;32m  OK\033[0m      %s\n' "$*"; }
 warn() { printf '\033[1;33m  WARN\033[0m    %s\n' "$*"; }
 abort(){ printf '\033[0;31m  ABORT\033[0m   %s\n' "$*"; exit 1; }
+trap 'printf "\n\033[0;31m  INSTALL FAILED\033[0m  lib/apply.sh line %s: %s\n  The system is NOT bootable. Log: %s\n" "$LINENO" "$BASH_COMMAND" "$LOGFILE"' ERR
 
 # --------------------------------------------------------------- config ------
 ENV_FILE=$(mktemp)
@@ -336,6 +337,7 @@ info "configuring system in chroot ..."
 cat > /mnt/setup.sh <<'CHROOT'
 #!/usr/bin/bash
 set -euo pipefail
+trap 'echo "setup.sh: line $LINENO failed: $BASH_COMMAND" >&2' ERR
 source /pwhash.env
 rm -f /pwhash.env
 
