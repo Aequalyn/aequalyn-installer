@@ -613,6 +613,13 @@ chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
 
 mkdir -p /mnt/usr/share/aequalyn /mnt/etc/aequalyn
 cp -r "$AEQUALYN_ROOT/." /mnt/usr/share/aequalyn/
+# Make /usr/share/aequalyn a git repo tracking GitHub so aequalyn-update can
+# pull updates later. remote add is local (no network), so offline installs
+# still work; aequalyn-update fetches when the user runs it online.
+if command -v git >/dev/null 2>&1 && [[ ! -d /mnt/usr/share/aequalyn/.git ]]; then
+    git -C /mnt/usr/share/aequalyn init -q
+    git -C /mnt/usr/share/aequalyn remote add origin https://github.com/Aequalyn/aequalyn.git
+fi
 cp "$CONFIG" /mnt/etc/aequalyn/install.toml
 printf 'Aequalyn %s\n' "$(cat "$AEQUALYN_ROOT/VERSION" 2>/dev/null || echo 0.1.0)" > /mnt/etc/aequalyn/release
 
