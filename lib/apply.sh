@@ -753,6 +753,52 @@ ExecStart=/usr/local/bin/aequalyn-first-boot
 WantedBy=multi-user.target
 EOF
 arch-chroot /mnt systemctl enable aequalyn-first-boot.service >/dev/null 2>&1 || true
+
+# Offline installs ship with SigLevel=Required but an uninitialised keyring and
+# no package database sync. On the first boot that has internet, initialise the
+# keyring, populate the Arch keys and sync the databases, then retire this unit.
+if [[ $OFFLINE -eq 1 ]]; then
+    mkdir -p /mnt/etc/aequalyn
+    touch /mnt/etc/aequalyn/offline-install
+    cat > /mnt/usr/local/bin/aequalyn-pacman-online <<'EOF'
+#!/usr/bin/bash
+set -u
+MARKER=/etc/aequalyn/offline-install
+[[ -f "$MARKER" ]] || exit 0
+
+# Wait for connectivity (up to ~5 minutes).
+for _ in $(seq 1 60); do
+    ping -c1 -W2 archlinux.org >/dev/null 2>&1 && break
+    sleep 5
+done
+ping -c1 -W2 archlinux.org >/dev/null 2>&1 || exit 0
+
+pacman-key --init >/dev/null 2>&1 || true
+pacman-key --populate archlinux >/dev/null 2>&1 || true
+pacman -Sy --noconfirm >/dev/null 2>&1 || true
+
+rm -f "$MARKER"
+systemctl disable aequalyn-pacman-online.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/aequalyn-pacman-online.service /usr/local/bin/aequalyn-pacman-online
+systemctl daemon-reload >/dev/null 2>&1 || true
+exit 0
+EOF
+    chmod 755 /mnt/usr/local/bin/aequalyn-pacman-online
+    cat > /mnt/etc/systemd/system/aequalyn-pacman-online.service <<'EOF'
+[Unit]
+Description=Aequalyn offline-install pacman keyring and database sync
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/aequalyn/offline-install
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aequalyn-pacman-online
+[Install]
+WantedBy=multi-user.target
+EOF
+    arch-chroot /mnt systemctl enable aequalyn-pacman-online.service >/dev/null 2>&1 || true
+    ok "offline pacman key/sync unit enabled"
+fi
 ok "Aequalyn desktop installed"
 
 # ---------------------------------------------------------- cleanup ----------
