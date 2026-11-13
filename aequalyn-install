@@ -57,10 +57,20 @@ exec > >(tee -a "$LOGFILE") 2>&1
 
 # --------------------------------------------------------------------- UI ----
 # gum (modern) -> dialog -> plain read. Everything works without any of them.
-if command -v gum >/dev/null 2>&1; then UI=gum
+# AEQUALYN_UI=gum|dialog|plain picks one.
+#
+# Everything this script prints also goes through tee into the log, so stdout
+# and stderr are pipes. Interactive prompts draw on the terminal itself
+# (/dev/tty): drawn into a pipe they see no terminal size, and gum crashes.
+TTY=/dev/tty
+if [[ -n "${AEQUALYN_UI:-}" ]]; then UI=$AEQUALYN_UI
+elif ! { : >"$TTY"; } 2>/dev/null; then UI=plain
+elif command -v gum >/dev/null 2>&1; then UI=gum
 elif command -v dialog >/dev/null 2>&1; then UI=dialog
 else UI=plain
 fi
+# gum with its interface on the terminal; only the answer comes back on stdout
+tgum() { gum "$@" 2>"$TTY"; }
 
 ui_style() { # ui_style <text>
     if [[ $UI == gum ]]; then gum style --border rounded --padding "1 2" --foreground 212 "$1"
@@ -85,13 +95,13 @@ ui_choose() { # ui_choose <prompt> <option...> -> echoes chosen
     while :; do
         if [[ $UI == gum ]]; then
             local sel
-            sel=$(printf '%s\n' "$@" | gum choose --header "$prompt" --height 15) || true
+            sel=$(printf '%s\n' "$@" | tgum choose --header "$prompt" --height 15) || true
             [[ -n "$sel" ]] && { printf '%s' "$sel"; return 0; }
         elif [[ $UI == dialog ]]; then
             local args=() i=0
             for o in "$@"; do args+=("$((++i))" "$o"); done
             local n
-            n=$(dialog --clear --stdout --menu "$prompt" 20 70 12 "${args[@]}") || n=""
+            n=$(dialog --clear --output-fd 3 3>&1 >"$TTY" 2>"$TTY" --menu "$prompt" 20 70 12 "${args[@]}") || n=""
             if [[ -n "$n" ]]; then
                 local j=0
                 for o in "$@"; do ((++j)); [[ $j -eq $n ]] && { printf '%s' "$o"; return 0; }; done
@@ -126,12 +136,12 @@ ui_multi() { # ui_multi <prompt> <option...> -> echoes chosen lines
     local prompt=$1; shift
     [[ $# -gt 0 ]] || return 0
     if [[ $UI == gum ]]; then
-        printf '%s\n' "$@" | gum choose --no-limit --header "$prompt" --height 15
+        printf '%s\n' "$@" | tgum choose --no-limit --header "$prompt" --height 15
     elif [[ $UI == dialog ]]; then
         local args=() i=0
         for o in "$@"; do args+=("$((++i))" "$o" off); done
         local sel
-        sel=$(dialog --clear --stdout --separate-output --checklist "$prompt" 20 70 12 "${args[@]}") || true
+        sel=$(dialog --clear --output-fd 3 3>&1 >"$TTY" 2>"$TTY" --separate-output --checklist "$prompt" 20 70 12 "${args[@]}") || true
         local j=0
         for o in "$@"; do ((++j)); grep -qx "$j" <<<"$sel" && printf '%s\n' "$o"; done
     else
@@ -146,19 +156,19 @@ ui_multi() { # ui_multi <prompt> <option...> -> echoes chosen lines
 
 ui_input() { # ui_input <prompt> <default>
     local prompt=$1 def=${2:-}
-    if [[ $UI == gum ]]; then gum input --header "$prompt" --value "$def"
-    elif [[ $UI == dialog ]]; then dialog --clear --stdout --inputbox "$prompt" 8 70 "$def"
+    if [[ $UI == gum ]]; then tgum input --header "$prompt" --value "$def" --placeholder "" --width 72
+    elif [[ $UI == dialog ]]; then dialog --clear --output-fd 3 3>&1 >"$TTY" 2>"$TTY" --inputbox "$prompt" 8 70 "$def"
     else read -r -p "  $prompt [$def]: " ans; printf '%s' "${ans:-$def}"; fi
 }
 
 ui_password() { # ui_password <prompt>
     local prompt=$1 a b
     if [[ $UI == gum ]]; then
-        a=$(gum input --password --header "$prompt")
-        b=$(gum input --password --header "Confirm password")
+        a=$(tgum input --password --header "$prompt" --placeholder "" --width 72)
+        b=$(tgum input --password --header "Confirm password" --placeholder "" --width 72)
     elif [[ $UI == dialog ]]; then
-        a=$(dialog --clear --stdout --passwordbox "$prompt" 8 70)
-        b=$(dialog --clear --stdout --passwordbox "Confirm password" 8 70)
+        a=$(dialog --clear --output-fd 3 3>&1 >"$TTY" 2>"$TTY" --passwordbox "$prompt" 8 70)
+        b=$(dialog --clear --output-fd 3 3>&1 >"$TTY" 2>"$TTY" --passwordbox "Confirm password" 8 70)
     else
         read -r -s -p "  $prompt: " a; echo
         read -r -s -p "  Confirm password: " b; echo
@@ -170,8 +180,8 @@ ui_password() { # ui_password <prompt>
 ui_confirm() { # ui_confirm <prompt> -> return 0/1
     local prompt=$1 a
     if [[ $ASSUME_YES -eq 1 ]]; then return 0; fi
-    if [[ $UI == gum ]]; then gum confirm "$prompt" --affirmative "Yes" --negative "No"
-    elif [[ $UI == dialog ]]; then dialog --clear --stdout --yesno "$prompt" 8 70
+    if [[ $UI == gum ]]; then tgum confirm "$prompt" --affirmative "Yes" --negative "No"
+    elif [[ $UI == dialog ]]; then dialog --clear --output-fd 3 3>&1 >"$TTY" 2>"$TTY" --yesno "$prompt" 8 70
     else
         while :; do
             IFS= read -r -p "  $prompt [Y/n]: " a || { printf '\n'; return 0; }
@@ -185,7 +195,7 @@ ui_confirm() { # ui_confirm <prompt> -> return 0/1
 }
 
 ui_pager() { # ui_pager <file>
-    if [[ $UI == gum ]] && [[ -t 1 ]]; then gum pager < "$1"
+    if [[ $UI == gum ]]; then tgum pager < "$1" >"$TTY"
     else cat "$1"; fi
 }
 
