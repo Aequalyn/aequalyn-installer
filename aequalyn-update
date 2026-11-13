@@ -47,6 +47,16 @@ if [[ $DO_PULL -eq 1 ]]; then
         || $SUDO git -C "$AQ_ROOT" reset --hard origin/main
 fi
 
+echo "==> fetching latest shell"
+SHELL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/aequalyn/src/aequalyn-shell"
+if [[ -d "$SHELL_CACHE/.git" ]]; then
+    git -C "$SHELL_CACHE" pull --ff-only -q >/dev/null 2>&1 || true
+else
+    mkdir -p "$(dirname "$SHELL_CACHE")"
+    git clone -q --depth 1 https://github.com/Aequalyn/aequalyn-shell.git "$SHELL_CACHE" >/dev/null 2>&1 || true
+fi
+export AEQUALYN_SHELL_DIR="$SHELL_CACHE"
+
 echo "==> re-applying dotfiles to $HOME (skipping .config/hypr)"
 bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
 
