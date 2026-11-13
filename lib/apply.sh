@@ -361,7 +361,8 @@ printf 'KEYMAP=%s\n' "$KEYMAP" > /etc/vconsole.conf
 # Aequalyn branding. limine-entry-tool names auto-generated boot entries after
 # PRETTY_NAME, and limine-snapper-sync hangs the snapshot submenu under that
 # name, so keep this in sync with TARGET_OS_NAME below.
-cat > /etc/os-release <<'OSR'
+rm -f /etc/os-release
+cat > /usr/lib/os-release <<'OSR'
 NAME="Aequalyn"
 PRETTY_NAME="Aequalyn Linux"
 ID=aequalyn
@@ -374,7 +375,7 @@ SUPPORT_URL="https://github.com/Aequalyn/issues"
 BUG_REPORT_URL="https://github.com/Aequalyn/issues"
 LOGO=archlinux-logo
 OSR
-ln -sf /etc/os-release /usr/lib/os-release
+ln -sf ../usr/lib/os-release /etc/os-release
 
 echo "root:$PWHASH" | chpasswd -e
 useradd -m -G wheel -s /bin/bash "$USERNAME"
