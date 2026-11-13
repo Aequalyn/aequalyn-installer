@@ -120,10 +120,15 @@ PKGS+=($(read_list "$AEQUALYN_ROOT/packages/base.packages"))
 PKGS+=($(read_list "$AEQUALYN_ROOT/packages/desktop.packages"))
 
 # Hardware conditionals (L1 detection, no AI)
-DET=$(bash "$AEQUALYN_ROOT/installer/aequalyn-detect" --shell)
-UCODE=$(sed -n 's/^UCODE=//p' <<<"$DET" | tr -d "'" | tr -d '"')
-GPU_PKGS=$(sed -n 's/^GPU_PKGS=//p' <<<"$DET" | tr -d "'" | tr -d '"')
-BATTERY=$(sed -n 's/^BATTERY=//p' <<<"$DET" | tr -d "'" | tr -d '"')
+# aequalyn-detect --shell emits shell-safe `KEY=%q` lines (see its header),
+# so source them instead of parsing with sed/tr, which would leave the
+# backslash-escapes from %q attached to multi-word values such as
+# "nvidia-open nvidia-utils" (bug: "target not found: nvidia-open\\").
+DET_ENV=$(mktemp)
+bash "$AEQUALYN_ROOT/installer/aequalyn-detect" --shell > "$DET_ENV"
+# shellcheck disable=SC1090
+. "$DET_ENV"
+rm -f "$DET_ENV"
 [[ -n "$UCODE" ]] && PKGS+=($UCODE)
 [[ -n "$GPU_PKGS" ]] && PKGS+=($GPU_PKGS)
 [[ "$BATTERY" == "yes" ]] && PKGS+=(tlp)
