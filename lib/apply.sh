@@ -474,9 +474,17 @@ else
   printf 'TARGET_OS_NAME="Aequalyn Linux"\nESP_PATH="/boot"\n' > /etc/limine-snapper-sync.conf
 fi
 
-# Fallback menu if the AUR stack was unavailable (online installs build it on
-# the first boot; this keeps the machine bootable until then).
-if [[ ! -s /boot/limine.conf ]]; then
+# The stack's mkinitcpio hook writes the kernel entries, but mkinitcpio already
+# ran above, so run it once more now that the hook is installed.
+if [[ -f /etc/default/limine ]] && pacman -Q limine-mkinitcpio-hook >/dev/null 2>&1; then
+  mkinitcpio -P >/dev/null 2>&1 || true
+fi
+
+# Own menu whenever no kernel entry exists: the AUR stack was unavailable, or
+# it only wrote its "EFI fallback" entry (which chainloads Limine itself).
+if ! grep -q 'protocol: linux' /boot/limine.conf 2>/dev/null; then
+  FB_IMG=initramfs-linux-fallback.img
+  [[ -f /boot/$FB_IMG ]] || FB_IMG=initramfs-linux.img
   cat > /boot/limine.conf <<LIMEOF
 timeout: 3
 
@@ -490,7 +498,7 @@ timeout: 3
     protocol: linux
     path: boot():/vmlinuz-linux
     cmdline: $CMDLINE_FB
-    module_path: boot():/initramfs-linux-fallback.img
+    module_path: boot():/$FB_IMG
 LIMEOF
 fi
 
