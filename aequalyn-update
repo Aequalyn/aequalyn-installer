@@ -25,6 +25,12 @@ done
 AQ_ROOT=/usr/share/aequalyn
 [[ -d "$AQ_ROOT" ]] || { echo "aequalyn-update: $AQ_ROOT not found" >&2; exit 1; }
 
+# /usr/share/aequalyn is root-owned; git needs safe.directory + sudo to
+# operate on it as a normal user. Keep sudo empty when already root.
+SUDO=""
+[[ $EUID -ne 0 ]] && SUDO=sudo
+$SUDO git config --global --add safe.directory "$AQ_ROOT" 2>/dev/null || true
+
 if [[ $DO_PULL -eq 1 ]]; then
     if [[ ! -d "$AQ_ROOT/.git" ]]; then
         echo "aequalyn-update: $AQ_ROOT is not a git clone; cannot pull from GitHub" >&2
@@ -33,10 +39,12 @@ if [[ $DO_PULL -eq 1 ]]; then
         exit 1
     fi
     echo "==> pulling latest Aequalyn from GitHub"
-    git -C "$AQ_ROOT" fetch --depth 1 origin main
-    # Point local main at origin/main, creating it if the tree was only
-    # initialized (empty) at install time. Resets the working tree to match.
-    git -C "$AQ_ROOT" checkout -B main origin/main
+    $SUDO git -C "$AQ_ROOT" fetch --depth 1 origin main
+    # Point local main at origin/main and reset the working tree to match.
+    # /usr/share/aequalyn is managed by the installer (plain copies), so all
+    # files are untracked: a plain checkout would refuse to overwrite them.
+    $SUDO git -C "$AQ_ROOT" checkout -B main origin/main 2>/dev/null \
+        || $SUDO git -C "$AQ_ROOT" reset --hard origin/main
 fi
 
 echo "==> re-applying dotfiles to $HOME"
