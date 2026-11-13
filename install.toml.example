@@ -26,7 +26,7 @@ mode        = "fullwipe"
 filesystem  = "btrfs"
 # LUKS2 root encryption. L1 defaults this to true on laptops.
 encrypt     = true
-efi_size_mb = 512
+efi_size_mb = 2048
 # Optional: pre-detected free region for dualboot (filled by aequalyn-detect).
 free_start  = ""
 free_end    = ""
@@ -51,6 +51,7 @@ flatpak  = false
 # Explicit extra packages, applied after the profile union.
 extra    = []
 aur      = false               # build the optional AUR set post-install
+editor   = "nano"              # "nano" | "vim" -- only one terminal editor is installed
 
 [agent]
 # L1: hardware detection + profile proposal. No model is bundled in the ISO.

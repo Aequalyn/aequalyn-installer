@@ -42,7 +42,7 @@ DISK=${DISK_DEVICE:-}
 MODE=${DISK_MODE:-fullwipe}
 FS=${DISK_FILESYSTEM:-btrfs}
 ENCRYPT=${DISK_ENCRYPT:-false}
-EFI_MB=${DISK_EFI_SIZE_MB:-512}
+EFI_MB=${DISK_EFI_SIZE_MB:-2048}
 EFI_DEV_MANUAL=${DISK_EFI_DEVICE:-}
 ROOT_DEV_MANUAL=${DISK_ROOT_DEVICE:-}
 BOOTLOADER=${BOOT_BOOTLOADER:-limine}
@@ -53,6 +53,7 @@ BROWSER=${PACKAGES_BROWSER:-chromium}
 FLATPAK=${PACKAGES_FLATPAK:-false}
 AUR=${PACKAGES_AUR:-false}
 EXTRA=${PACKAGES_EXTRA:-}
+EDITOR=${PACKAGES_EDITOR:-nano}
 SNAPSHOT_BEFORE=${AGENT_SNAPSHOT_BEFORE:-true}
 THEME_MODE=${AEQUALYN_THEME_MODE:-wallpaper}
 THEME_APPS=${AEQUALYN_THEME_APPS:-true}
@@ -155,6 +156,12 @@ if [[ "$BROWSER" != "firefox" ]]; then
 fi
 [[ "$FLATPAK" == "true" ]] && PKGS+=(flatpak)
 [[ -n "$EXTRA" ]] && PKGS+=($EXTRA)
+# One editor only, chosen at install time (nano or vim).
+case "$EDITOR" in
+    vim)  PKGS+=(vim) ;;
+    nano) PKGS+=(nano) ;;
+    *)    PKGS+=(nano) ;;
+esac
 
 # Drop packages not resolvable from the chosen source (offline repo may omit
 # some optional profile packages). Online installs let pacman report errors.
@@ -571,6 +578,11 @@ if [[ -f /usr/lib/systemd/system/limine-snapper-sync.service ]]; then
   systemctl enable limine-snapper-sync.service 2>/dev/null || true
 fi
 
+# Don't let Nextcloud autostart on every boot (issue 5).
+if [[ -f /usr/share/applications/com.nextcloud.desktopclient.nextcloud.desktop ]]; then
+  sed -i '/^\[Desktop Entry\]/a Hidden=true' /usr/share/applications/com.nextcloud.desktopclient.nextcloud.desktop
+fi
+
 mkdir -p /etc/aequalyn
 CHROOT
 
@@ -617,19 +629,32 @@ d["appearance"].update(themeMode=sys.argv[2],
                        barOpacity=int(sys.argv[5]))
 open(p,"w").write(json.dumps(d, indent=2) + "\n")
 PY
-# No display manager: logging in on the first console starts the desktop,
-# the other consoles stay plain text (Ctrl+Alt+F2 for a rescue shell).
+# SDDM: autologin the installed user into the Aequalyn Wayland session.
+mkdir -p /mnt/etc/sddm.conf.d
+cat > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf <<'SDDM'
+[Autologin]
+User=__USERNAME__
+Session=aequalyn
+Relogin=false
+SDDM
+
+# Enable the display manager so the machine boots straight into the desktop.
+systemctl enable sddm.service 2>/dev/null || true
+
+# With a display manager we don't need the .bash_profile desktop autostart;
+# keep a bare one so a raw tty login still works as a fallback.
 BP="/mnt/home/$USERNAME/.bash_profile"
 [[ -f "$BP" ]] || printf '[[ -f ~/.bashrc ]] && . ~/.bashrc\n' > "$BP"
 if ! grep -q 'aequalyn: desktop on tty1' "$BP" 2>/dev/null; then
     cat >> "$BP" <<'EOF'
 
-# aequalyn: desktop on tty1
+# aequalyn: desktop on tty1 (fallback when SDDM is not running)
 if [[ -z ${WAYLAND_DISPLAY:-} && ${XDG_VTNR:-0} -eq 1 ]] && command -v aequalyn-desktop >/dev/null; then
     aequalyn-desktop
 fi
 EOF
 fi
+
 # Starts Hyprland; if it dies at once (a VM without 3D acceleration), retries
 # with software rendering, then without atomic modesetting. Returns to the
 # console if nothing works.
