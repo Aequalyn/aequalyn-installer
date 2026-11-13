@@ -47,8 +47,8 @@ if [[ $DO_PULL -eq 1 ]]; then
         || $SUDO git -C "$AQ_ROOT" reset --hard origin/main
 fi
 
-echo "==> re-applying dotfiles to $HOME"
-bash "$AQ_ROOT/install.sh" --target "$HOME"
+echo "==> re-applying dotfiles to $HOME (skipping .config/hypr)"
+bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
 
 echo "==> refreshing helper scripts in /usr/local/bin"
 sudo cp -a "$AQ_ROOT/bin/." /usr/local/bin/
