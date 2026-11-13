@@ -54,4 +54,22 @@ echo "==> refreshing helper scripts in /usr/local/bin"
 sudo cp -a "$AQ_ROOT/bin/." /usr/local/bin/
 sudo chmod 755 /usr/local/bin/aequalyn-* 2>/dev/null || true
 
-echo "==> done. Restart the shell / log out and back in to pick up changes."
+echo "==> restarting the shell"
+if pgrep -x qs >/dev/null 2>&1; then
+    pkill -x qs 2>/dev/null || true
+    for _ in $(seq 1 25); do
+        pgrep -x qs >/dev/null 2>&1 || break
+        sleep 0.2
+    done
+fi
+if command -v aequalyn-session-start >/dev/null 2>&1; then
+    aequalyn-session-start >/dev/null 2>&1 || true
+else
+    QS_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/quickshell"
+    if command -v qs >/dev/null 2>&1; then
+        nohup qs -n -d -p "$QS_CONFIG" >/dev/null 2>&1 &
+        disown
+    fi
+fi
+
+echo "==> done. Shell restarted."
