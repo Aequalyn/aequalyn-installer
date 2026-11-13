@@ -26,13 +26,17 @@ AQ_ROOT=/usr/share/aequalyn
 [[ -d "$AQ_ROOT" ]] || { echo "aequalyn-update: $AQ_ROOT not found" >&2; exit 1; }
 
 if [[ $DO_PULL -eq 1 ]]; then
-    if ! git -C "$AQ_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [[ ! -d "$AQ_ROOT/.git" ]]; then
         echo "aequalyn-update: $AQ_ROOT is not a git clone; cannot pull from GitHub" >&2
-        echo "       (clone it with: sudo git clone https://github.com/Aequalyn/aequalyn.git $AQ_ROOT)" >&2
+        echo "       Re-install Aequalyn, or initialize it manually:" >&2
+        echo "       sudo git init $AQ_ROOT && sudo git -C $AQ_ROOT remote add origin https://github.com/Aequalyn/aequalyn.git" >&2
         exit 1
     fi
     echo "==> pulling latest Aequalyn from GitHub"
-    git -C "$AQ_ROOT" pull --ff-only origin main
+    git -C "$AQ_ROOT" fetch --depth 1 origin main
+    # Point local main at origin/main, creating it if the tree was only
+    # initialized (empty) at install time. Resets the working tree to match.
+    git -C "$AQ_ROOT" checkout -B main origin/main
 fi
 
 echo "==> re-applying dotfiles to $HOME"
