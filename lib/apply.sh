@@ -543,6 +543,15 @@ if [[ -d /boot/EFI/Microsoft && "$CHAINLOAD" == "true" ]] \
 WEOF
 fi
 
+# limine-update writes the OS and kernel entries but not the snapshot submenu:
+# that block is owned by limine-snapper-sync. Run it once so the installed
+# system offers its snapshots on the very first boot, and so later
+# limine-update runs keep the block (they preserve an existing //Snapshots).
+if command -v limine-snapper-sync >/dev/null 2>&1; then
+  limine-snapper-sync >/dev/null 2>&1 \
+    || warn "limine-snapper-sync failed; snapshot entries may be missing"
+fi
+
 systemctl enable NetworkManager.service
 systemctl enable bluetooth.service
 systemctl enable systemd-timesyncd.service
