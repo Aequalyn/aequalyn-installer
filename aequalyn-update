@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# aequalyn-update -- pull latest Aequalyn from GitHub and re-apply dotfiles.
+#
+#   aequalyn-update          git pull /usr/share/aequalyn, then re-apply
+#                            dotfiles to the current user's home
+#   aequalyn-update --no-pull  re-apply the local copy without touching git
+#
+# Intended to be run by the installed user (not root) whenever a new release
+# is pushed to github.com/Aequalyn/aequalyn. It refreshes:
+#   * the system source tree at /usr/share/aequalyn  (git pull)
+#   * the user's dotfiles      (~/.config, ~/.local/bin, ~/Pictures, ...)
+#   * the helper scripts in /usr/local/bin             (sudo cp)
+#
+set -euo pipefail
+
+DO_PULL=1
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-pull) DO_PULL=0; shift ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+AQ_ROOT=/usr/share/aequalyn
+[[ -d "$AQ_ROOT" ]] || { echo "aequalyn-update: $AQ_ROOT not found" >&2; exit 1; }
+
+if [[ $DO_PULL -eq 1 ]]; then
+    if ! git -C "$AQ_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "aequalyn-update: $AQ_ROOT is not a git clone; cannot pull from GitHub" >&2
+        echo "       (clone it with: sudo git clone https://github.com/Aequalyn/aequalyn.git $AQ_ROOT)" >&2
+        exit 1
+    fi
+    echo "==> pulling latest Aequalyn from GitHub"
+    git -C "$AQ_ROOT" pull --ff-only origin main
+fi
+
+echo "==> re-applying dotfiles to $HOME"
+bash "$AQ_ROOT/install.sh" --target "$HOME"
+
+echo "==> refreshing helper scripts in /usr/local/bin"
+sudo cp -a "$AQ_ROOT/bin/." /usr/local/bin/
+sudo chmod 755 /usr/local/bin/aequalyn-* 2>/dev/null || true
+
+echo "==> done. Restart the shell / log out and back in to pick up changes."
