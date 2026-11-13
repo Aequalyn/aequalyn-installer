@@ -293,6 +293,7 @@ if [[ -z "$CONFIG" ]]; then
     flatpak_v=$(ui_choose "Enable Flatpak?" "no" "yes")
     [[ "$flatpak_v" == "yes" ]] && flatpak_v=true || flatpak_v=false
     source_v=$(ui_choose "Package source" "auto" "offline" "online")
+    editor_v=$(ui_choose "Terminal editor" "nano" "vim")
 
     ui_style "Step 5/6 · Aequalyn defaults"
     theme_v=$(ui_choose "Colour mode" "wallpaper" "theme" "light")
@@ -302,15 +303,16 @@ if [[ -z "$CONFIG" ]]; then
     # Rewrite the config with the answers (keeping the documented schema).
     python3 - "$CONFIG" "$hostname_v" "$username_v" "$timezone_v" "$keymap_v" \
                   "$disk_v" "$mode_v" "$encrypt_v" "$profiles_v" "$browser_v" \
-                  "$flatpak_v" "$source_v" "$theme_v" "$apps_v" <<'PY'
+                  "$flatpak_v" "$source_v" "$theme_v" "$apps_v" "$editor_v" <<'PY'
 import sys, tomllib, pathlib
 f = pathlib.Path(sys.argv[1])
 d = tomllib.loads(f.read_text())
-(h, u, tz, km, disk, mode, enc, profiles, browser, flatpak, src, theme, apps) = sys.argv[2:]
+(h, u, tz, km, disk, mode, enc, profiles, browser, flatpak, src, theme, apps, editor) = sys.argv[2:]
 d.setdefault("system", {}).update(hostname=h, username=u, timezone=tz, keymap=km, password_set=True)
 d.setdefault("disk", {}).update(device=disk, mode=mode, encrypt=(enc=="true"))
 d.setdefault("packages", {}).update(profiles=profiles.split(), browser=browser,
-                                    flatpak=(flatpak=="true"), source=src)
+                                    flatpak=(flatpak=="true"), source=src,
+                                    editor=editor)
 d.setdefault("aequalyn", {}).update(theme_mode=theme, theme_apps=(apps=="true"))
 def dump(o, indent=""):
     lines=[]
@@ -338,7 +340,7 @@ load_config "$CONFIG"
 : "${CFG_VERSION:=1}" "${CFG_SYSTEM_HOSTNAME:=aequalyn}" "${CFG_SYSTEM_USERNAME:=user}"
 : "${CFG_SYSTEM_LOCALE:=en_US.UTF-8}" "${CFG_SYSTEM_KEYMAP:=us}" "${CFG_SYSTEM_TIMEZONE:=UTC}"
 : "${CFG_DISK_DEVICE:=}" "${CFG_DISK_MODE:=fullwipe}" "${CFG_DISK_FILESYSTEM:=btrfs}"
-: "${CFG_DISK_ENCRYPT:=false}" "${CFG_DISK_EFI_SIZE_MB:=512}"
+: "${CFG_DISK_ENCRYPT:=false}" "${CFG_DISK_EFI_SIZE_MB:=2048}"
 : "${CFG_BOOT_BOOTLOADER:=limine}" "${CFG_BOOT_CHAINLOAD_WINDOWS:=true}"
 : "${CFG_PACKAGES_SOURCE:=auto}" "${CFG_PACKAGES_PROFILES:=minimal}"
 : "${CFG_PACKAGES_BROWSER:=chromium}" "${CFG_PACKAGES_FLATPAK:=false}"
