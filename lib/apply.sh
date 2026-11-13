@@ -59,7 +59,13 @@ BAR_HEIGHT=${AEQUALYN_BAR_HEIGHT:-32}
 BAR_OPACITY=${AEQUALYN_BAR_OPACITY:-100}
 
 [[ $EUID -eq 0 ]] || abort "must run as root"
-[[ -d /sys/firmware/efi ]] || abort "Aequalyn v1 is UEFI-only (no /sys/firmware/efi)"
+# UEFI is the main target; legacy BIOS (VMs that default to it, such as GNOME
+# Boxes, older PCs) gets Limine's BIOS stage on a full-disk GPT install.
+if [[ -d /sys/firmware/efi ]]; then FIRMWARE=uefi; else FIRMWARE=bios; fi
+if [[ $FIRMWARE == bios && "$MODE" != fullwipe ]]; then
+    abort "booted in legacy BIOS mode: only a full-disk install is supported (boot in UEFI mode for dual boot)"
+fi
+info "firmware: $FIRMWARE"
 [[ -n "$DISK" && -b "$DISK" ]] || abort "invalid or missing [disk].device: $DISK"
 
 # Never touch the device the ISO booted from.
@@ -339,6 +345,7 @@ KEYMAP="__KEYMAP__"
 USERNAME="__USERNAME__"
 ENCRYPT="__ENCRYPT__"
 EFINUM="__EFINUM__"
+FIRMWARE="__FIRMWARE__"
 DISK="__DISK__"
 CHAINLOAD="__CHAINLOAD__"
 CMDLINE="__CMDLINE__"
@@ -456,8 +463,15 @@ chown root:root /.snapshots 2>/dev/null || true
 mkdir -p /boot/EFI/limine /boot/EFI/BOOT
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
-efibootmgr --create --disk "$DISK" --part "$EFINUM" \
-  --label "Aequalyn (Limine)" --loader '\EFI\limine\BOOTX64.EFI' --unicode || true
+if [[ "$FIRMWARE" == uefi ]]; then
+  efibootmgr --create --disk "$DISK" --part "$EFINUM" \
+    --label "Aequalyn (Limine)" --loader '\EFI\limine\BOOTX64.EFI' --unicode || true
+else
+  # Legacy BIOS: stage 1 in the MBR, stage 2 in the GPT gap before partition 1
+  # (it starts at 1 MiB), limine-bios.sys next to limine.conf on /boot.
+  cp /usr/share/limine/limine-bios.sys /boot/
+  limine bios-install "$DISK"
+fi
 
 # Install the pre-built Limine snapshot stack from the ISO's offline repo. Its
 # hooks generate /boot/limine.conf and the kernel entries themselves; the entry
@@ -535,7 +549,7 @@ LOCALE_BASE=${LOCALE%%.*}
 PWHASH=$(printf '%s' "$PASSWORD" | openssl passwd -6 -stdin)
 printf "PWHASH='%s'\nLOCALE='%s'\nLANG_BASE='%s'\n" "$PWHASH" "$LOCALE" "$LOCALE_BASE" > /mnt/pwhash.env
 for kv in "TIMEZONE:$TIMEZONE" "HOSTNAME:$HOSTNAME" "KEYMAP:$KEYMAP" "USERNAME:$USERNAME" \
-          "ENCRYPT:$ENCRYPT" "EFINUM:$EFI_NUM" "DISK:$DISK" "CHAINLOAD:$CHAINLOAD_WINDOWS" \
+          "ENCRYPT:$ENCRYPT" "EFINUM:$EFI_NUM" "FIRMWARE:$FIRMWARE" "DISK:$DISK" "CHAINLOAD:$CHAINLOAD_WINDOWS" \
           "CMDLINE:$CMDLINE" "CMDLINE_FB:$CMDLINE_FB" "FLATPAK:$FLATPAK"; do
     k=${kv%%:*}; v=${kv#*:}
     sed -i "s|__${k}__|${v}|g" /mnt/setup.sh
