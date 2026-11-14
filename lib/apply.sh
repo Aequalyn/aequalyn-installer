@@ -8,6 +8,13 @@ set -euo pipefail
 CONFIG=$1
 PASSWORD=$2
 LOGFILE=${3:-/root/aequalyn-install.log}
+# When driven by the QML installer, mirror everything we print to LOGFILE so
+# the "Log: ..." path shown in the UI actually contains the install log. The
+# CLI already tees to its own log, so it leaves this off to avoid duplicates.
+if [[ "${AEQUALYN_TEE_LOG:-0}" == "1" && -n "$LOGFILE" ]]; then
+    mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+    exec > >(tee -a "$LOGFILE") 2>&1
+fi
 AEQUALYN_ROOT=${AEQUALYN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 export AEQUALYN_ROOT
 
@@ -433,7 +440,16 @@ else
   sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap block filesystems fsck)/' /etc/mkinitcpio.conf
 fi
 printf 'COMPRESSION="zstd"\n' >> /etc/mkinitcpio.conf
-mkinitcpio -P
+# mkinitcpio is CPU-bound and runs inside the chroot on the live system, so a
+# full-priority run can starve the QML installer's event loop (Quickshell shows
+# "Application Not Responding"). Run it at a low CPU/IO priority so the UI
+# keeps repainting; it takes slightly longer but the install is unattended.
+info "building initramfs (low priority, keeps the installer responsive) ..."
+if command -v ionice >/dev/null 2>&1; then
+    ionice -c2 -n7 nice -n 10 mkinitcpio -P
+else
+    nice -n 10 mkinitcpio -P
+fi
 
 cat > /etc/systemd/zram-generator.conf <<'Z'
 [zram0]

@@ -54,6 +54,7 @@ Scope {
     property string selectedDisk: ""
     property string mode: "fullwipe"
     property bool encrypt: false
+    property int efiSizeMb: 2048
 
     property bool profMinimal: true
     property bool profStudent: false
@@ -90,8 +91,24 @@ Scope {
         (!root.step2Valid ? 2 :
         (!root.step3Valid ? 3 :
         (!root.step4Valid ? 4 : 5))))))
-    property string logText: ""
     property string statusText: ""
+    property bool installFinished: false
+    property bool rebooting: false
+
+    // Log is kept as a ListModel instead of one growing string: appending to a
+    // huge TextArea forces a full re-layout per line, which is what made the UI
+    // freeze while mkinitcpio -P produced a burst of output. A ListView also
+    // virtualises rendering, so the log stays cheap no matter how long it gets.
+    property var logQueue: []
+    readonly property int logMaxLines: 20000
+    property bool logFollow: true
+    ListModel { id: logModel }
+    Timer {
+        id: logFlushTimer
+        interval: 100
+        repeat: false
+        onTriggered: root.flushLog()
+    }
 
     function selectedProfiles() {
         const out = [];
@@ -114,6 +131,8 @@ Scope {
         if (disk.device) root.selectedDisk = disk.device;
         if (disk.mode) root.mode = disk.mode;
         root.encrypt = disk.encrypt === true;
+        if (typeof disk.efi_size_mb === "number" && disk.efi_size_mb >= 256)
+            root.efiSizeMb = disk.efi_size_mb;
         const pkgs = d.packages || {};
         if (pkgs.source) root.source = pkgs.source;
         root.profMinimal = false; root.profStudent = false; root.profDev = false;
@@ -159,7 +178,7 @@ Scope {
             'mode = "' + root.mode + '"\n' +
             'filesystem = "btrfs"\n' +
             "encrypt = " + enc + "\n" +
-            "efi_size_mb = 512\n" +
+            "efi_size_mb = " + root.efiSizeMb + "\n" +
             'free_start = ""\n' +
             'free_end = ""\n\n' +
             "[boot]\n" +
@@ -186,6 +205,33 @@ Scope {
             'profile = "default"\n';
     }
 
+    // ---- log buffering ------------------------------------------------------
+    // Lines are queued and flushed in batches (100 ms) instead of touching the
+    // view once per line, so a burst of mkinitcpio output cannot block the GUI.
+    function appendLog(line) {
+        if (line === undefined || line === null) return;
+        const s = String(line);
+        if (s.length === 0) return;
+        root.logQueue.push({ line: s });
+        if (!logFlushTimer.running) logFlushTimer.start();
+    }
+
+    function flushLog() {
+        if (root.logQueue.length === 0) return;
+        const batch = root.logQueue;
+        root.logQueue = [];
+        const overflow = logModel.count + batch.length - root.logMaxLines;
+        if (overflow > 0 && logModel.count > 0)
+            logModel.remove(0, Math.min(overflow, logModel.count));
+        logModel.append(batch);
+    }
+
+    function clearLog() {
+        root.logQueue = [];
+        logModel.clear();
+        root.logFollow = true;
+    }
+
     function startApply() {
         if (root.locked) return;
         if (root.password === "" || root.password !== root.passwordConfirm) {
@@ -197,7 +243,8 @@ Scope {
             return;
         }
         root.locked = true;
-        root.logText = "";
+        root.clearLog();
+        root.installFinished = false;
         root.statusText = "Writing configuration...";
         root.writing = true;
         root.step = 6;
@@ -326,7 +373,12 @@ Scope {
         command: ["tee", root.configPath]
         onStarted: { write(root.generateToml()); stdinEnabled = false; }
         stdout: StdioCollector { onStreamFinished: {} }
-        stderr: StdioCollector { onStreamFinished: { if (text) root.logText += text; } }
+        stderr: StdioCollector {
+            onStreamFinished: {
+                const ls = (text || "").replace(/\n$/, "").split("\n");
+                for (let i = 0; i < ls.length; i++) root.appendLog(ls[i]);
+            }
+        }
         onExited: (code) => {
             root.writing = false;
             if (code !== 0) {
@@ -347,13 +399,28 @@ Scope {
         id: applyProc
         running: false
         command: ["bash", root.applyScript, root.configPath, root.password, root.logFile]
-        environment: ({ "ASSUME_YES": "1", "AEQUALYN_NO_REBOOT": "1" })
-        stdout: SplitParser { onRead: (line) => { root.logText += line + "\n"; } }
-        stderr: SplitParser { onRead: (line) => { root.logText += line + "\n"; } }
+        environment: ({ "ASSUME_YES": "1", "AEQUALYN_NO_REBOOT": "1", "AEQUALYN_TEE_LOG": "1" })
+        stdout: SplitParser { onRead: (line) => { root.appendLog(line); } }
+        stderr: SplitParser { onRead: (line) => { root.appendLog(line); } }
         onExited: (code) => {
             root.applying = false;
-            if (code === 0) root.statusText = "Installation complete. Log: " + root.logFile;
-            else root.statusText = "Apply failed (exit " + code + "). See log.";
+            root.flushLog();
+            if (code === 0) {
+                root.installFinished = true;
+                root.statusText = "Installation complete. Log: " + root.logFile;
+            } else {
+                root.statusText = "Apply failed (exit " + code + "). See log.";
+            }
+        }
+    }
+
+    Process {
+        id: rebootProc
+        running: false
+        command: root.isRoot ? ["systemctl", "reboot"] : ["pkexec", "systemctl", "reboot"]
+        onExited: (code) => {
+            root.rebooting = false;
+            root.statusText = "Reboot failed (exit " + code + "). Reboot manually.";
         }
     }
 
@@ -370,6 +437,43 @@ Scope {
         color: root.textMuted
         font.pixelSize: 13
         font.weight: Font.DemiBold
+    }
+
+    // Auto-following, virtualised log view. Used by the Finish page.
+    component LogView: Rectangle {
+        color: root.bgSurface
+        radius: 12
+        border.color: root.border
+        border.width: 1
+        clip: true
+
+        ListView {
+            id: logView
+            anchors.fill: parent
+            anchors.margins: 8
+            clip: true
+            model: logModel
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            delegate: Text {
+                required property string line
+                width: logView.width
+                text: line
+                color: root.textMuted
+                font.family: "monospace"
+                font.pixelSize: 11
+                wrapMode: Text.WrapAnywhere
+            }
+            function followEnd() {
+                if (root.logFollow) Qt.callLater(() => logView.positionViewAtEnd());
+            }
+            onCountChanged: followEnd()
+            onHeightChanged: followEnd()
+            onVisibleChanged: if (visible) followEnd()
+            onMovementStarted: root.logFollow = false
+            onMovementEnded: root.logFollow = atYEnd
+            onAtYEndChanged: if (atYEnd) root.logFollow = true
+        }
     }
 
     component TextFieldStyled: TextField {
@@ -752,6 +856,18 @@ Scope {
                                         contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 }
                                     }
                                     Text { text: "Selected: " + root.selectedDisk; color: root.textMuted; font.pixelSize: 12 }
+                                    FieldLabel { text: "EFI PARTITION SIZE (MB)" }
+                                    TextFieldStyled {
+                                        Layout.fillWidth: true
+                                        text: root.efiSizeMb
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        validator: IntValidator { bottom: 300; top: 8192 }
+                                        onTextChanged: {
+                                            const v = parseInt(text, 10);
+                                            if (!isNaN(v) && v >= 300 && v <= 8192) root.efiSizeMb = v;
+                                        }
+                                    }
+                                    Text { text: "2 GiB (2048 MB) recommended: the ESP holds the kernel, initramfs and bootloader, and keeps room for snapshots/firmware updates."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                 }
                             }
                         }
@@ -873,17 +989,6 @@ Scope {
                                         Text { text: "Imported configs do not store passwords. Enter one before applying."; color: root.textMuted; font.pixelSize: 11 }
                                     }
 
-                                    TextArea {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 150
-                                        text: root.logText
-                                        font.family: "monospace"
-                                        font.pixelSize: 11
-                                        color: root.textMuted
-                                        readOnly: true
-                                        visible: root.logText !== ""
-                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                    }
                                     Button {
                                         enabled: !(root.writing || root.applying) && !root.locked
                                         text: root.writing ? "Writing..." : (root.applying ? "Applying..." : (root.dryRun ? "Write config (dry run)" : "Install"))
@@ -900,41 +1005,46 @@ Scope {
 
                         // 6 Finish
                         Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                ColumnLayout {
-                                    width: parent.width
+                                spacing: 8
+                                Text { text: "Finish"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                Text { text: root.statusText; color: root.warn; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                ProgressBar {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 16
+                                    indeterminate: root.writing || root.applying
+                                    value: (root.writing || root.applying) ? 0 : 1
+                                }
+                                LogView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumHeight: 200
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
                                     spacing: 8
-                                    Text { text: "Finish"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold }
-                                    Text { text: root.statusText; color: root.warn; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    ProgressBar {
-                                        Layout.fillWidth: true
-                                        implicitHeight: 16
-                                        indeterminate: root.writing || root.applying
-                                        value: (root.writing || root.applying) ? 0 : 1
-                                        visible: true
-                                    }
-                                    TextArea {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 320
-                                        text: root.logText
-                                        font.family: "monospace"
-                                        font.pixelSize: 11
-                                        color: root.textMuted
-                                        readOnly: true
-                                        visible: root.logText !== ""
-                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                    }
                                     Button {
-                                        text: "Reboot now"
-                                        visible: root.statusText.indexOf("complete") >= 0
-                                        onClicked: { root.saveGeom(); Qt.quit(); /* reboot via backend if needed */ }
-                                        background: Rectangle { color: root.accent; radius: 12 }
+                                        text: root.rebooting ? "Rebooting..." : "Reboot now"
+                                        enabled: root.installFinished && !root.rebooting
+                                        onClicked: {
+                                            root.saveGeom();
+                                            root.rebooting = true;
+                                            root.statusText = "Rebooting...";
+                                            rebootProc.running = true;
+                                        }
+                                        background: Rectangle { color: parent.enabled ? root.accent : root.bgHover; radius: 12 }
                                         contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                     }
+                                    Button {
+                                        text: "Close installer"
+                                        enabled: !root.rebooting
+                                        onClicked: { root.saveGeom(); Qt.quit(); }
+                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
+                                        contentItem: Text { text: parent.text; color: root.textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    }
+                                    Item { Layout.fillWidth: true }
                                 }
                             }
                         }
