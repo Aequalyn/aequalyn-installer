@@ -53,13 +53,46 @@ if [[ -d "$SHELL_DIR/.git" ]]; then
     $SUDO git -C "$SHELL_DIR" pull --ff-only -q >/dev/null 2>&1 || true
 else
     # Legacy bundled copy: replace with a live clone so future updates track git.
-    $SUDO rm -rf "$SHELL_DIR"
-    $SUDO git clone -q --depth 1 https://github.com/Aequalyn/aequalyn-shell.git "$SHELL_DIR" >/dev/null 2>&1 || true
+    _tmp=$(mktemp -d)
+    if $SUDO git clone -q --depth 1 https://github.com/Aequalyn/aequalyn-shell.git "$_tmp/shell" >/dev/null 2>&1; then
+        $SUDO rm -rf "$SHELL_DIR"
+        $SUDO mv "$_tmp/shell" "$SHELL_DIR"
+    fi
+    rm -rf "$_tmp"
 fi
 export AEQUALYN_SHELL_DIR="$SHELL_DIR"
 
 echo "==> re-applying dotfiles to $HOME (skipping .config/hypr)"
 bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
+
+echo "==> provisioning agent skills (.agents, .claude, ...)"
+if [[ -x "$AQ_ROOT/bin/aequalyn-provision-user" ]]; then
+    AEQUALYN_PATH="$AQ_ROOT" AEQUALYN_SHELL_DIR="$SHELL_DIR" bash "$AQ_ROOT/bin/aequalyn-provision-user" || true
+elif command -v aequalyn-provision-user >/dev/null 2>&1; then
+    AEQUALYN_PATH="$AQ_ROOT" AEQUALYN_SHELL_DIR="$SHELL_DIR" aequalyn-provision-user || true
+fi
+
+# Guarantee the agent skill folders exist in $HOME even when no provisioner is
+# available (e.g. older installs). Link any skill source we can find.
+mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills" "$HOME/.hermes/skills"
+SKILLS_SRC=""
+for base in "$SHELL_DIR" "$SHELL_DIR/default" "$AQ_ROOT/shell" "$AQ_ROOT/shell/default"; do
+    [[ -z "$base" ]] && continue
+    if [[ -d "$base/agents/skills" ]]; then SKILLS_SRC="$base/agents/skills"; break; fi
+done
+if [[ -n "$SKILLS_SRC" ]]; then
+    for skill in "$SKILLS_SRC"/*/; do
+        [[ -d "$skill" ]] || continue
+        skill=${skill%/}
+        name=${skill##*/}
+        ln -sfn "$skill" "$HOME/.agents/skills/$name"
+        ln -sfn "$skill" "$HOME/.claude/skills/$name"
+        ln -sfn "$skill" "$HOME/.codex/skills/$name"
+        ln -sfn "$skill" "$HOME/.pi/agent/skills/$name"
+        ln -sfn "$skill" "$HOME/.gemini/config/skills/$name"
+        ln -sfn "$skill" "$HOME/.hermes/skills/$name"
+    done
+fi
 
 echo "==> refreshing helper scripts in /usr/local/bin"
 sudo cp -a "$AQ_ROOT/bin/." /usr/local/bin/
