@@ -1,89 +1,102 @@
 #!/usr/bin/env bash
-# aequalyn-update -- pull latest Aequalyn from GitHub and re-apply dotfiles.
+# aequalyn-update -- bring this machine up to the newest Aequalyn on GitHub.
 #
-#   aequalyn-update          git pull /usr/share/aequalyn, then re-apply
-#                            dotfiles to the current user's home
-#   aequalyn-update --no-pull  re-apply the local copy without touching git
+#   aequalyn-update            get the newest Aequalyn and its shell, re-apply them to
+#                              your home and restart the shell
+#   aequalyn-update --no-pull  re-apply what is already here, without GitHub
 #
-# Intended to be run by the installed user (not root) whenever a new release
-# is pushed to github.com/Aequalyn/aequalyn. It refreshes:
-#   * the system source tree at /usr/share/aequalyn  (git pull)
-#   * the user's dotfiles      (~/.config, ~/.local/bin, ~/Pictures, ...)
-#   * the helper scripts in /usr/local/bin             (sudo cp)
+# Run it as yourself, not as root: it asks for your password for the two system copies
+# (/usr/share/aequalyn and the shell inside it, shell/), which belong to root.
 #
-set -euo pipefail
+# Your settings stay as they are. install.sh keeps everything you changed (settings,
+# layouts, docks, default apps, terminal and GTK preferences, colours, wallpaper and
+# theme) and first saves a copy in ~/.local/state/aequalyn/backups.
+#
+# It lives in Aequalyn's bin/, so every update also brings the newest updater.
+# AEQUALYN_ROOT, AEQUALYN_BIN_DIR and AEQUALYN_GIT point it elsewhere, for testing.
+set -Eeuo pipefail
 
 DO_PULL=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-pull) DO_PULL=0; shift ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
         *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
 
-AQ_ROOT=/usr/share/aequalyn
+AQ_ROOT=${AEQUALYN_ROOT:-/usr/share/aequalyn}
+SHELL_DIR="$AQ_ROOT/shell"
+BIN_DIR=${AEQUALYN_BIN_DIR:-/usr/local/bin}
+AEQUALYN_GIT=${AEQUALYN_GIT:-https://github.com/Aequalyn}
+SYSTEM_URL="$AEQUALYN_GIT/aequalyn.git"
+SHELL_URL="$AEQUALYN_GIT/aequalyn-shell.git"
+
 [[ -d "$AQ_ROOT" ]] || { echo "aequalyn-update: $AQ_ROOT not found" >&2; exit 1; }
 
-# /usr/share/aequalyn is root-owned; git needs safe.directory + sudo to
-# operate on it as a normal user. Keep sudo empty when already root.
 SUDO=""
 [[ $EUID -ne 0 ]] && SUDO=sudo
-$SUDO git config --global --add safe.directory "$AQ_ROOT" 2>/dev/null || true
+
+# Say where it stopped: a failed step leaves everything after it as it was.
+step="starting"
+trap 'echo; echo "aequalyn-update: stopped while $step." >&2; echo "Nothing after that step was changed; your settings are as they were." >&2' ERR
+
+# git in a root-owned clone. safe.directory is given per command, so git's global
+# config isn't touched (it used to grow by a line on every update).
+g() { local dir=$1; shift; $SUDO git -c safe.directory="$dir" -C "$dir" "$@"; }
+
+# Puts the newest main from GitHub in place in a root-owned clone. A fetch and a hard
+# reset, not a pull: it can't stop half way on a merge, and works even if the history
+# on GitHub was rewritten. Untracked files (the system tree's shell/) are left alone.
+sync_clone() { # <dir> <url> <what>
+    local dir=$1 url=$2 what=$3
+    step="downloading the newest $what"
+    g "$dir" fetch -q --depth 1 "$url" main
+    step="putting the newest $what in place"
+    g "$dir" checkout -q -f -B main FETCH_HEAD
+    g "$dir" reset -q --hard FETCH_HEAD
+}
 
 if [[ $DO_PULL -eq 1 ]]; then
     if [[ ! -d "$AQ_ROOT/.git" ]]; then
-        echo "aequalyn-update: $AQ_ROOT is not a git clone; cannot pull from GitHub" >&2
-        echo "       Re-install Aequalyn, or initialize it manually:" >&2
-        echo "       sudo git init $AQ_ROOT && sudo git -C $AQ_ROOT remote add origin https://github.com/Aequalyn/aequalyn.git" >&2
+        echo "aequalyn-update: $AQ_ROOT is not a git clone, so it can't be updated from GitHub." >&2
+        echo "  Re-install Aequalyn, or make it one:" >&2
+        echo "  sudo git init $AQ_ROOT && sudo git -C $AQ_ROOT remote add origin $SYSTEM_URL" >&2
         exit 1
     fi
-    echo "==> pulling latest Aequalyn from GitHub"
-    $SUDO git -C "$AQ_ROOT" fetch --depth 1 origin main
-    # Point local main at origin/main and reset the working tree to match.
-    # /usr/share/aequalyn is managed by the installer (plain copies), so all
-    # files are untracked: a plain checkout would refuse to overwrite them.
-    $SUDO git -C "$AQ_ROOT" checkout -B main origin/main 2>/dev/null \
-        || $SUDO git -C "$AQ_ROOT" reset --hard origin/main
-fi
+    echo "==> getting the newest Aequalyn"
+    sync_clone "$AQ_ROOT" "$SYSTEM_URL" "Aequalyn"
 
-echo "==> fetching latest shell"
-SHELL_DIR="$AQ_ROOT/shell"
-if [[ -d "$SHELL_DIR/.git" ]]; then
-    $SUDO git config --global --add safe.directory "$SHELL_DIR" 2>/dev/null || true
-    $SUDO git -C "$SHELL_DIR" fetch --depth 1 origin main
-    # Reset instead of ff-only pull: the shell tree is managed by Aequalyn, so
-    # any local/uncommitted change must not be allowed to block updates (that is
-    # how a release can be silently skipped, leaving pages like Store missing).
-    $SUDO git -C "$SHELL_DIR" checkout -B main origin/main 2>/dev/null \
-        || $SUDO git -C "$SHELL_DIR" reset --hard origin/main
-else
-    # Legacy bundled copy: replace with a live clone so future updates track git.
-    _tmp=$(mktemp -d)
-    if $SUDO git clone -q --depth 1 https://github.com/Aequalyn/aequalyn-shell.git "$_tmp/shell" >/dev/null 2>&1; then
+    echo "==> getting the newest shell"
+    if [[ -d "$SHELL_DIR/.git" ]]; then
+        sync_clone "$SHELL_DIR" "$SHELL_URL" "shell"
+    else
+        # an old bundled copy: replaced by a clone, swapped in only once it is complete
+        step="downloading the shell"
+        $SUDO rm -rf "$SHELL_DIR.new"
+        $SUDO git clone -q --depth 1 "$SHELL_URL" "$SHELL_DIR.new"
+        step="putting the shell in place"
         $SUDO rm -rf "$SHELL_DIR"
-        $SUDO mv "$_tmp/shell" "$SHELL_DIR"
+        $SUDO mv "$SHELL_DIR.new" "$SHELL_DIR"
     fi
-    rm -rf "$_tmp"
 fi
-export AEQUALYN_SHELL_DIR="$SHELL_DIR"
 
-echo "==> re-applying dotfiles to $HOME (skipping .config/hypr)"
-bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
+echo "==> re-applying Aequalyn to $HOME (your settings stay as they are)"
+step="re-applying Aequalyn to your home"
+AEQUALYN_SHELL_DIR="$SHELL_DIR" bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
 
-echo "==> provisioning agent skills (.agents, .claude, ...)"
+echo "==> setting up the agent skills (.agents, .claude, ...)"
+step="setting up the agent skills"
 if [[ -x "$AQ_ROOT/bin/aequalyn-provision-user" ]]; then
     AEQUALYN_PATH="$AQ_ROOT" AEQUALYN_SHELL_DIR="$SHELL_DIR" bash "$AQ_ROOT/bin/aequalyn-provision-user" || true
 elif command -v aequalyn-provision-user >/dev/null 2>&1; then
     AEQUALYN_PATH="$AQ_ROOT" AEQUALYN_SHELL_DIR="$SHELL_DIR" aequalyn-provision-user || true
 fi
-
-# Guarantee the agent skill folders exist in $HOME even when no provisioner is
-# available (e.g. older installs). Link any skill source we can find.
+# The skill folders exist even when no provisioner is there (older installs): link any
+# skill the shell ships.
 mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills" "$HOME/.hermes/skills"
 SKILLS_SRC=""
-for base in "$SHELL_DIR" "$SHELL_DIR/default" "$AQ_ROOT/shell" "$AQ_ROOT/shell/default"; do
-    [[ -z "$base" ]] && continue
+for base in "$SHELL_DIR" "$SHELL_DIR/default"; do
     if [[ -d "$base/agents/skills" ]]; then SKILLS_SRC="$base/agents/skills"; break; fi
 done
 if [[ -n "$SKILLS_SRC" ]]; then
@@ -91,20 +104,21 @@ if [[ -n "$SKILLS_SRC" ]]; then
         [[ -d "$skill" ]] || continue
         skill=${skill%/}
         name=${skill##*/}
-        ln -sfn "$skill" "$HOME/.agents/skills/$name"
-        ln -sfn "$skill" "$HOME/.claude/skills/$name"
-        ln -sfn "$skill" "$HOME/.codex/skills/$name"
-        ln -sfn "$skill" "$HOME/.pi/agent/skills/$name"
-        ln -sfn "$skill" "$HOME/.gemini/config/skills/$name"
-        ln -sfn "$skill" "$HOME/.hermes/skills/$name"
+        for d in .agents/skills .claude/skills .codex/skills .pi/agent/skills .gemini/config/skills .hermes/skills; do
+            ln -sfn "$skill" "$HOME/$d/$name"
+        done
     done
 fi
 
-echo "==> refreshing helper scripts in /usr/local/bin"
-sudo cp -a "$AQ_ROOT/bin/." /usr/local/bin/
-sudo chmod 755 /usr/local/bin/aequalyn-* 2>/dev/null || true
+echo "==> refreshing the aequalyn commands in $BIN_DIR"
+step="refreshing the aequalyn commands"
+for f in "$AQ_ROOT/bin/"*; do
+    [[ -f "$f" ]] && $SUDO cp -a "$f" "$BIN_DIR/"
+done
+$SUDO chmod 755 "$BIN_DIR"/aequalyn-* 2>/dev/null || true
 
 echo "==> restarting the shell"
+step="restarting the shell"
 if pgrep -x qs >/dev/null 2>&1; then
     pkill -x qs 2>/dev/null || true
     for _ in $(seq 1 25); do
@@ -122,4 +136,5 @@ else
     fi
 fi
 
-echo "==> done. Shell restarted."
+echo "==> done: Aequalyn $(g "$AQ_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'), shell $(g "$SHELL_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')."
+echo "    Your settings are as you left them; a copy is in ~/.local/state/aequalyn/backups."
