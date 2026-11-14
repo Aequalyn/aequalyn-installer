@@ -115,6 +115,17 @@ EOF
 else
     PACMAN_CONF="/etc/pacman.conf"
     ping -c 1 -W 2 archlinux.org >/dev/null 2>&1 || abort "no internet and no offline repo"
+    # pacstrap copies the live keyring into the new root, and pacman refuses
+    # every mirror package while that keyring is missing or untrusted:
+    #   error: ... invalid or corrupted package (PGP signature)
+    # which reads like a checksum failure. Make sure the Arch keys exist before
+    # pacstrap runs; `--init` is idempotent (it only mints the local signing
+    # key when none is available) and `--populate` re-imports the keys shipped
+    # by archlinux-keyring.
+    info "initialising the pacman keyring ..."
+    pacman-key --init >/dev/null 2>&1 || abort "pacman-key --init failed"
+    pacman-key --populate archlinux >/dev/null 2>&1 \
+        || abort "pacman-key --populate archlinux failed"
     ok "using online Arch mirrors"
 fi
 
