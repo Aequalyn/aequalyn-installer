@@ -654,6 +654,13 @@ if command -v git >/dev/null 2>&1 && [[ ! -d /mnt/usr/share/aequalyn/.git ]]; th
     git -C /mnt/usr/share/aequalyn init -q
     git -C /mnt/usr/share/aequalyn remote add origin https://github.com/Aequalyn/aequalyn.git
 fi
+
+# Provision agent skill folders (.agents, .claude, ...) for the new user so AI
+# assistants can load Aequalyn's SKILL.md out of the box. Must run after the
+# tree above has been copied into /usr/share/aequalyn.
+if [[ -x /mnt/usr/share/aequalyn/bin/aequalyn-provision-user ]]; then
+    arch-chroot /mnt runuser -u "$USERNAME" -- /usr/share/aequalyn/bin/aequalyn-provision-user >/dev/null 2>&1 || true
+fi
 cp "$CONFIG" /mnt/etc/aequalyn/install.toml
 printf 'Aequalyn %s\n' "$(cat "$AEQUALYN_ROOT/VERSION" 2>/dev/null || echo 0.1.0)" > /mnt/etc/aequalyn/release
 
@@ -665,6 +672,10 @@ mkdir -p /mnt/usr/local/bin
 for s in aequalyn-install aequalyn-update aequalyn-detect aequalyn-repair aequalyn-live-session; do
     [[ -f "$AEQUALYN_ROOT/installer/$s" ]] && cp "$AEQUALYN_ROOT/installer/$s" "/mnt/usr/local/bin/$s"
 done
+# aequalyn-provision-user lives in bin/, not installer/.
+if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-provision-user" ]]; then
+    cp "$AEQUALYN_ROOT/bin/aequalyn-provision-user" "/mnt/usr/local/bin/aequalyn-provision-user"
+fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
 # settings.json from [aequalyn] section
