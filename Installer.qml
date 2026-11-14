@@ -897,44 +897,44 @@ Scope {
                                 }
                             }
                         }
-                    }
 
-                    // 6 Finish
-                    Item {
-                        ScrollView {
-                            ScrollBar.vertical.policy: ScrollBar.AlwaysOff
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            anchors.fill: parent
-                            anchors.margins: 16
-                            ColumnLayout {
-                                width: parent.width
-                                spacing: 8
-                                Text { text: "Finish"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold }
-                                Text { text: root.statusText; color: root.warn; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                ProgressBar {
-                                    Layout.fillWidth: true
-                                    implicitHeight: 16
-                                    indeterminate: root.writing || root.applying
-                                    value: (root.writing || root.applying) ? 0 : 1
-                                    visible: true
-                                }
-                                TextArea {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 320
-                                    text: root.logText
-                                    font.family: "monospace"
-                                    font.pixelSize: 11
-                                    color: root.textMuted
-                                    readOnly: true
-                                    visible: root.logText !== ""
-                                    background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                }
-                                Button {
-                                    text: "Reboot now"
-                                    visible: root.statusText.indexOf("complete") >= 0
-                                    onClicked: { root.saveGeom(); Qt.quit(); /* reboot via backend if needed */ }
-                                    background: Rectangle { color: root.accent; radius: 12 }
-                                    contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        // 6 Finish
+                        Item {
+                            ScrollView {
+                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                ColumnLayout {
+                                    width: parent.width
+                                    spacing: 8
+                                    Text { text: "Finish"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                    Text { text: root.statusText; color: root.warn; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                    ProgressBar {
+                                        Layout.fillWidth: true
+                                        implicitHeight: 16
+                                        indeterminate: root.writing || root.applying
+                                        value: (root.writing || root.applying) ? 0 : 1
+                                        visible: true
+                                    }
+                                    TextArea {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 320
+                                        text: root.logText
+                                        font.family: "monospace"
+                                        font.pixelSize: 11
+                                        color: root.textMuted
+                                        readOnly: true
+                                        visible: root.logText !== ""
+                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
+                                    }
+                                    Button {
+                                        text: "Reboot now"
+                                        visible: root.statusText.indexOf("complete") >= 0
+                                        onClicked: { root.saveGeom(); Qt.quit(); /* reboot via backend if needed */ }
+                                        background: Rectangle { color: root.accent; radius: 12 }
+                                        contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    }
                                 }
                             }
                         }
