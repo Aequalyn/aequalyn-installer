@@ -64,6 +64,7 @@ Scope {
 
     property string browser: "chromium"
     property bool flatpak: false
+    property bool seedWebapps: true
     property string source: "auto"
     property string editor: "nano"
 
@@ -147,9 +148,10 @@ Scope {
                 if (pr === "creative") root.profCreative = true;
             }
         }
-        if (pkgs.browser) root.browser = pkgs.browser;
-        root.flatpak = pkgs.flatpak === true;
-        if (pkgs.editor) root.editor = pkgs.editor;
+        if (pkgs && pkgs.browser) root.browser = pkgs.browser;
+        if (pkgs) root.flatpak = pkgs.flatpak === true;
+        if (pkgs && pkgs.seedWebapps !== undefined) root.seedWebapps = (pkgs.seedWebapps === true);
+        if (pkgs && pkgs.editor) root.editor = pkgs.editor;
         const ae = d.aequalyn || {};
         if (ae.theme_mode) root.themeMode = ae.theme_mode;
         root.themeApps = ae.theme_apps !== false;
@@ -190,6 +192,7 @@ Scope {
             "profiles = " + profileStr + "\n" +
             'browser = "' + root.browser + '"\n' +
             "flatpak = " + flat + "\n" +
+            "seed_webapps = " + (root.seedWebapps ? "true" : "false") + "\n" +
             "extra = []\n" +
             "aur = false\n" +
             'editor = "' + root.editor + '"\n\n' +
@@ -902,6 +905,8 @@ Scope {
                                         currentIndex: Math.max(0, ["Chromium","Firefox","Zen"].map(x=>x.toLowerCase()).indexOf(root.browser))
                                         onActivated: root.browser = currentText.toLowerCase()
                                     }
+                                    CheckBox { enabled: !root.locked; text: "Seed web apps"; checked: root.seedWebapps; onToggled: root.seedWebapps = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
+                                    Text { text: "Adds Reddit, ChatGPT and YouTube Music, on Super + Shift + D/G/Y. The browser chosen above opens them; it can be changed later in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     CheckBox { enabled: !root.locked; text: "Enable Flatpak"; checked: root.flatpak; onToggled: root.flatpak = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
                                     Text { text: "Enable Flatpak application support."; color: root.textMuted; font.pixelSize: 11 }
                                     FieldLabel { text: "PACKAGE SOURCE" }
