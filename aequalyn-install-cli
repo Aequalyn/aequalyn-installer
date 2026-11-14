@@ -23,6 +23,7 @@ CONFIG=""
 ASSUME_YES=0
 DO_REPAIR=0
 DETECT_ONLY=0
+SIMULATE=0
 DRY_RUN=0
 PASSWORD_FILE=""
 while [[ $# -gt 0 ]]; do
@@ -31,6 +32,7 @@ while [[ $# -gt 0 ]]; do
         --yes|-y) ASSUME_YES=1; shift ;;
         --repair) DO_REPAIR=1; shift ;;
         --detect) DETECT_ONLY=1; shift ;;
+        --simulate) SIMULATE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --password-file) PASSWORD_FILE=$2; shift 2 ;;
         -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
@@ -381,6 +383,42 @@ fi
 
 # ------------------------------------------------------------------ apply -----
 [[ $EUID -eq 0 ]] || ui_abort "the installer must run as root"
+if [[ $SIMULATE -eq 1 ]]; then
+    IMG=/tmp/aequalyn-sim.img
+    rm -f "$IMG"
+    truncate -s 4G "$IMG"
+    LOOP=$(losetup -f --show "$IMG")
+    export AEQUALYN_SIMULATE=true
+    trap 'losetup -d "$LOOP" 2>/dev/null || true; rm -f "$IMG"' EXIT
+    if [[ -z "$CONFIG" ]]; then
+        bash "$SELF_DIR/aequalyn-detect" --toml > /tmp/aequalyn-sim.toml
+        CONFIG=/tmp/aequalyn-sim.toml
+    fi
+    PATCHED=/tmp/aequalyn-sim-patched.toml
+    python3 - "$CONFIG" "$LOOP" "$PATCHED" <<'PYINNER'
+import sys, tomllib, pathlib
+src, loop, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+d = tomllib.loads(pathlib.Path(src).read_text())
+d.setdefault("disk", {})["device"] = loop
+d["disk"]["mode"] = "fullwipe"
+def dump(o):
+    lines=[]
+    for k,v in o.items():
+        if isinstance(v,dict):
+            lines.append("\n[" + k + "]"); lines.extend(dump(v))
+        elif isinstance(v,bool): lines.append(f"{k} = {'true' if v else 'false'}")
+        elif isinstance(v,list): lines.append(f"{k} = [" + ", ".join(f'"{x}"' for x in v) + "]")
+        elif isinstance(v,(int,float)): lines.append(f"{k} = {v}")
+        else: lines.append(f'{k} = "{v}"')
+    return lines
+out = "version = 1\n" + "\n".join(dump({k:v for k,v in d.items() if k!='version'})) + "\n"
+pathlib.Path(dst).write_text(out)
+PYINNER
+    CONFIG="$PATCHED"
+    ASSUME_YES=1
+    PASSWORD="${PASSWORD:-simpass}"
+fi
+
 bash "$SELF_DIR/lib/apply.sh" "$CONFIG" "$PASSWORD" "$LOGFILE"
 ui_ok "installation complete. Log: $LOGFILE"
 if ui_confirm "Reboot now?"; then reboot; fi
