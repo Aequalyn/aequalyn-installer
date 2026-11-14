@@ -151,7 +151,7 @@ device      = "$first_disk"
 mode        = "$mode"
 filesystem  = "btrfs"
 encrypt     = $encrypt
-efi_size_mb = 512
+efi_size_mb = 2048
 free_start  = ""
 free_end    = ""
 
