@@ -19,6 +19,26 @@ for arg in "$@"; do
     esac
 done
 
+# Recover the graphical session env when invoked via plain sudo (which drops it).
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+    for rd in /run/user/*/; do
+        [[ -d "$rd" ]] || continue
+        for sock in "$rd"wayland-*; do
+            [[ -S "$sock" ]] || continue
+            export XDG_RUNTIME_DIR="${rd%/}"
+            export WAYLAND_DISPLAY="${sock##*/}"
+            break 2
+        done
+    done
+fi
+if [[ -z "${DISPLAY:-}" ]]; then
+    for d in /tmp/.X11-unix/X*; do
+        [[ -S "$d" ]] || continue
+        export DISPLAY=":${d##*X}"
+        break
+    done
+fi
+
 # Graphical installer.
 if command -v quickshell >/dev/null 2>&1; then
     exec quickshell -p "$SELF_DIR/shell.qml" "$@"
