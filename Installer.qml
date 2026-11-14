@@ -324,7 +324,7 @@ Scope {
         running: false
         stdinEnabled: true
         command: ["tee", root.configPath]
-        onStarted: { write(root.generateToml()); }
+        onStarted: { write(root.generateToml()); stdinEnabled = false; }
         stdout: StdioCollector { onStreamFinished: {} }
         stderr: StdioCollector { onStreamFinished: { if (text) root.logText += text; } }
         onExited: (code) => {
@@ -348,8 +348,8 @@ Scope {
         running: false
         command: ["bash", root.applyScript, root.configPath, root.password, root.logFile]
         environment: ({ "ASSUME_YES": "1", "AEQUALYN_NO_REBOOT": "1" })
-        stdout: StdioCollector { onStreamFinished: { root.logText += text; } }
-        stderr: StdioCollector { onStreamFinished: { if (text) root.logText += text; } }
+        stdout: SplitParser { onRead: (line) => { root.logText += line + "\n"; } }
+        stderr: SplitParser { onRead: (line) => { root.logText += line + "\n"; } }
         onExited: (code) => {
             root.applying = false;
             if (code === 0) root.statusText = "Installation complete. Log: " + root.logFile;
