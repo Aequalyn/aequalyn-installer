@@ -58,6 +58,7 @@ CHAINLOAD_WINDOWS=${BOOT_CHAINLOAD_WINDOWS:-true}
 SOURCE=${PACKAGES_SOURCE:-auto}
 PROFILES=${PACKAGES_PROFILES:-minimal}
 BROWSER=${PACKAGES_BROWSER:-chromium}
+SEED_WEBAPPS=${PACKAGES_SEEDWEBAPPS:-true}
 FLATPAK=${PACKAGES_FLATPAK:-false}
 AUR=${PACKAGES_AUR:-false}
 EXTRA=${PACKAGES_EXTRA:-}
@@ -637,7 +638,8 @@ info "installing the Aequalyn desktop ..."
 UID_T=$(arch-chroot /mnt id -u "$USERNAME" 2>/dev/null || awk -F: -v u="$USERNAME" '$1==u{print $3; exit}' /mnt/etc/passwd 2>/dev/null || echo 1000)
 GID_T=$(arch-chroot /mnt id -g "$USERNAME" 2>/dev/null || awk -F: -v u="$USERNAME" '$1==u{print $4; exit}' /mnt/etc/passwd 2>/dev/null || echo 1000)
 mkdir -p "/mnt/home/$USERNAME"
-bash "$AEQUALYN_ROOT/install.sh" --target "/mnt/home/$USERNAME" --owner "$UID_T:$GID_T"
+AEQUALYN_SEED_WEBAPPS="$SEED_WEBAPPS" AEQUALYN_WEBAPP_BROWSER="$BROWSER" \
+    bash "$AEQUALYN_ROOT/install.sh" --target "/mnt/home/$USERNAME" --owner "$UID_T:$GID_T"
 # install.sh sees the live-ISO mount path; rewrite it for the installed system.
 printf '/home/%s/Pictures/Wallpapers/beach.jpg' "$USERNAME" \
     > "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
