@@ -906,7 +906,7 @@ Scope {
                                         onActivated: root.browser = currentText.toLowerCase()
                                     }
                                     CheckBox { enabled: !root.locked; text: "Seed web apps"; checked: root.seedWebapps; onToggled: root.seedWebapps = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    Text { text: "Adds Reddit, ChatGPT and YouTube Music, on Super + Shift + D/G/Y. The browser chosen above opens them; it can be changed later in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                    Text { text: "Adds Reddit, ChatGPT, YouTube, YouTube Music, WhatsApp and Gmail, on Super + Shift + D/G/T/Y/H/E. The browser chosen above opens them; it can be changed later in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     CheckBox { enabled: !root.locked; text: "Enable Flatpak"; checked: root.flatpak; onToggled: root.flatpak = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
                                     Text { text: "Enable Flatpak application support."; color: root.textMuted; font.pixelSize: 11 }
                                     FieldLabel { text: "PACKAGE SOURCE" }
