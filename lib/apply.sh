@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+SIMULATE="${AEQUALYN_SIMULATE:-false}"
 # aequalyn-install :: apply -- deterministic executor for install.toml.
 # Called by aequalyn-install after the user has approved the config. Never asks
 # interactive questions; everything comes from the config + the password arg.
@@ -292,6 +293,10 @@ mkfs.fat -F32 -n AEQUALYN "$EFI_DEV" >/dev/null
 udevadm settle
 mount "$EFI_DEV" /mnt/boot
 ok "filesystems ready (btrfs: ${SUBVOLS[*]})"
+if [[ "$SIMULATE" == "true" ]]; then
+    info "SIMULATE: skipping pacstrap/chroot; filesystems created on $ROOT_DEV"
+    exit 0
+fi
 
 # Chainload Windows bootloader into our ESP
 if [[ "$MODE" == "dualboot" && -n "$WIN_EFI" && "$WIN_EFI" != "$EFI_DEV" ]]; then

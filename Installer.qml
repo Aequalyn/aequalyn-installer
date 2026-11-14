@@ -30,14 +30,15 @@ Scope {
     property string logFile: root.isRoot ? "/root/aequalyn-install_qml.log" : (Quickshell.env("HOME") + "/aequalyn-install_qml.log")
 
     property int step: 0
-    readonly property var stepNames: ["Welcome", "Identity", "Disk", "Packages", "Aequalyn", "Review"]
+    readonly property var stepNames: ["Welcome", "Identity", "Disk", "Packages", "Aequalyn", "Review", "Finish"]
     readonly property var stepDescriptions: [
         "Hardware proposal and overview",
         "Hostname, user, timezone, password",
         "Target disk, mode, encryption",
         "Profiles, browser, sources",
         "Theme and GTK apps",
-        "Review install.toml and apply"
+        "Review install.toml and apply",
+        "Apply progress and log"
     ]
     property var detect: ({})
     property var disks: []
@@ -83,12 +84,12 @@ Scope {
     readonly property bool step2Valid: root.selectedDisk !== ""
     readonly property bool step3Valid: root.profMinimal || root.profStudent || root.profDev || root.profGaming || root.profCreative
     readonly property bool step4Valid: true
-    readonly property int maxAllowedStep: root.imported ? 5 :
+    readonly property int maxAllowedStep: root.locked ? 6 : (root.imported ? 5 :
         (!root.step0Valid ? 0 :
         (!root.step1Valid ? 1 :
         (!root.step2Valid ? 2 :
         (!root.step3Valid ? 3 :
-        (!root.step4Valid ? 4 : 5)))))
+        (!root.step4Valid ? 4 : 5))))))
     property string logText: ""
     property string statusText: ""
 
@@ -199,6 +200,7 @@ Scope {
         root.logText = "";
         root.statusText = "Writing configuration...";
         root.writing = true;
+        root.step = 6;
         writeProc.running = true;
     }
 
@@ -897,6 +899,47 @@ Scope {
                         }
                     }
 
+                    // 6 Finish
+                    Item {
+                        ScrollView {
+                            ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            anchors.fill: parent
+                            anchors.margins: 16
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: 8
+                                Text { text: "Finish"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                Text { text: root.statusText; color: root.warn; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                ProgressBar {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 16
+                                    indeterminate: root.writing || root.applying
+                                    value: (root.writing || root.applying) ? 0 : 1
+                                    visible: true
+                                }
+                                TextArea {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 320
+                                    text: root.logText
+                                    font.family: "monospace"
+                                    font.pixelSize: 11
+                                    color: root.textMuted
+                                    readOnly: true
+                                    visible: root.logText !== ""
+                                    background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
+                                }
+                                Button {
+                                    text: "Reboot now"
+                                    visible: root.statusText.indexOf("complete") >= 0
+                                    onClicked: { root.saveGeom(); Qt.quit(); /* reboot via backend if needed */ }
+                                    background: Rectangle { color: root.accent; radius: 12 }
+                                    contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                }
+                            }
+                        }
+                    }
+
                     // bottom step bar
                     Rectangle {
                         Layout.fillWidth: true
@@ -992,8 +1035,8 @@ Scope {
                             Item { Layout.fillWidth: true }
                             Button {
                                 text: "Next"
-                                visible: root.step < 5
-                                enabled: root.step < 5 && !root.locked && root.step < root.maxAllowedStep
+                                visible: root.step < 6
+                                enabled: root.step < 6 && !root.locked && root.step < root.maxAllowedStep
                                 onClicked: { if (root.imported && root.step === 0) root.step = 5; else root.step++; }
                                 background: Rectangle { color: root.accent; radius: 12 }
                                 contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
