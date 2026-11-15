@@ -693,6 +693,9 @@ if [[ -d /usr/share/fonts/qylock ]]; then
     mkdir -p /mnt/usr/share/fonts/qylock
     cp -r /usr/share/fonts/qylock/. /mnt/usr/share/fonts/qylock/ 2>/dev/null || true
 fi
+# Default SDDM theme: Aequalyn.
+mkdir -p /mnt/etc/sddm.conf.d
+printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
 # Marker for the optional SDDM lock-screen theme pack: the Settings app only
 # shows the Lock Screens page when this file exists.
 if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
