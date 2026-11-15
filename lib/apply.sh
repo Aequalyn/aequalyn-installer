@@ -377,6 +377,10 @@ trap 'echo "setup.sh: line $LINENO failed: $BASH_COMMAND" >&2' ERR
 source /pwhash.env
 rm -f /pwhash.env
 
+info() { printf '\033[0;34m  INFO\033[0m    %s\n' "$*"; }
+ok()   { printf '\033[0;32m  OK\033[0m      %s\n' "$*"; }
+warn() { printf '\033[1;33m  WARN\033[0m    %s\n' "$*"; }
+
 TIMEZONE="__TIMEZONE__"
 HOSTNAME="__HOSTNAME__"
 KEYMAP="__KEYMAP__"
@@ -675,6 +679,19 @@ done
 # aequalyn-provision-user lives in bin/, not installer/.
 if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-provision-user" ]]; then
     cp "$AEQUALYN_ROOT/bin/aequalyn-provision-user" "/mnt/usr/local/bin/aequalyn-provision-user"
+fi
+# SDDM lock-screen themes + helper (live ISO ships a few in /usr/share/sddm/themes).
+if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-sddm" ]]; then
+    cp "$AEQUALYN_ROOT/bin/aequalyn-sddm" "/mnt/usr/local/bin/aequalyn-sddm"
+fi
+if [[ -d /usr/share/sddm/themes ]]; then
+    mkdir -p /mnt/usr/share/sddm/themes
+    cp -r /usr/share/sddm/themes/. /mnt/usr/share/sddm/themes/ 2>/dev/null || true
+fi
+# SDDM theme fonts (qylock themes ship their own).
+if [[ -d /usr/share/fonts/qylock ]]; then
+    mkdir -p /mnt/usr/share/fonts/qylock
+    cp -r /usr/share/fonts/qylock/. /mnt/usr/share/fonts/qylock/ 2>/dev/null || true
 fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
