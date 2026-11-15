@@ -775,17 +775,20 @@ d["appearance"].update(themeMode=sys.argv[2],
                        barOpacity=int(sys.argv[5]))
 open(p,"w").write(json.dumps(d, indent=2) + "\n")
 PY
-# SDDM: autologin the installed user into the Aequalyn Wayland session.
+# SDDM: autologin the installed user into the Aequalyn Wayland session. The
+# live ISO's aequalyn.desktop is not installed on the target; Hyprland's own
+# session file is, so prefer that unless a packaged Aequalyn session exists.
+SDDM_SESSION=hyprland
+[[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn
 mkdir -p /mnt/etc/sddm.conf.d
-cat > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf <<'SDDM'
-[Autologin]
-User=__USERNAME__
-Session=aequalyn
-Relogin=false
-SDDM
+printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$USERNAME" "$SDDM_SESSION" \
+    > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf
 
-# Enable the display manager so the machine boots straight into the desktop.
-systemctl enable sddm.service 2>/dev/null || true
+# Enable the display manager in the target so the machine boots straight into
+# the desktop. This must run inside the chroot: running it on the live ISO only
+# touched the live system, leaving fresh installs booting to a console.
+arch-chroot /mnt systemctl enable sddm.service 2>/dev/null \
+    || warn "could not enable sddm.service; the installed system may boot to a console"
 
 # With a display manager we don't need the .bash_profile desktop autostart;
 # keep a bare one so a raw tty login still works as a fallback.
