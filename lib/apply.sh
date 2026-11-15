@@ -350,14 +350,21 @@ fi
 # ---------------------------------------------------------- plymouth ---------
 # The plymouth mkinitcpio hook embeds the default theme and the theme's
 # BOOT_SECONDS, so the theme must be staged before the chroot picks it as
-# default and builds the initramfs. The bundled tree is the installed variant:
-# squash START_BAR_ON_SPLASH (no passphrase prompt on live media) and let the
-# calibrate helper measure this machine before the image is built.
+# default and builds the initramfs. START_BAR_ON_SPLASH follows the install
+# type, and the calibrate helper measures this machine before the image is
+# built.
 info "staging the Aequalyn boot splash ..."
 if [[ -d "$AEQUALYN_ROOT/plymouth/aequalyn" ]]; then
     install -d -m 0755 /mnt/usr/share/plymouth/themes/aequalyn
     cp -a "$AEQUALYN_ROOT/plymouth/aequalyn/." /mnt/usr/share/plymouth/themes/aequalyn/
-    sed -i 's/^START_BAR_ON_SPLASH = .*/START_BAR_ON_SPLASH = 0;/' \
+    # Encrypted installs start the bar at the passphrase answer; plain ones
+    # have no prompt to start from, so the bar runs with the splash instead.
+    if [[ "$ENCRYPT" == "true" ]]; then
+        START_BAR=0
+    else
+        START_BAR=1
+    fi
+    sed -i "s/^START_BAR_ON_SPLASH = .*/START_BAR_ON_SPLASH = $START_BAR;/" \
         /mnt/usr/share/plymouth/themes/aequalyn/aequalyn.script
 else
     warn "plymouth/aequalyn missing from the source tree; the target gets no splash"
