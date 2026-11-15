@@ -346,6 +346,26 @@ ok "base system installed"
 if [[ "$ENCRYPT" == "true" ]]; then
     printf 'aequalyn_root UUID=%s none luks,discard\n' "$LUKS_UUID" >> /mnt/etc/crypttab
 fi
+
+# ---------------------------------------------------------- plymouth ---------
+# The plymouth mkinitcpio hook embeds the default theme and the theme's
+# BOOT_SECONDS, so the theme must be staged before the chroot picks it as
+# default and builds the initramfs. The bundled tree is the installed variant:
+# squash START_BAR_ON_SPLASH (no passphrase prompt on live media) and let the
+# calibrate helper measure this machine before the image is built.
+info "staging the Aequalyn boot splash ..."
+if [[ -d "$AEQUALYN_ROOT/plymouth/aequalyn" ]]; then
+    install -d -m 0755 /mnt/usr/share/plymouth/themes/aequalyn
+    cp -a "$AEQUALYN_ROOT/plymouth/aequalyn/." /mnt/usr/share/plymouth/themes/aequalyn/
+    sed -i 's/^START_BAR_ON_SPLASH = .*/START_BAR_ON_SPLASH = 0;/' \
+        /mnt/usr/share/plymouth/themes/aequalyn/aequalyn.script
+else
+    warn "plymouth/aequalyn missing from the source tree; the target gets no splash"
+fi
+if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-plymouth-calibrate" ]]; then
+    install -Dm 0755 "$AEQUALYN_ROOT/bin/aequalyn-plymouth-calibrate" \
+        /mnt/usr/local/bin/aequalyn-plymouth-calibrate
+fi
 if [[ $OFFLINE -eq 1 ]]; then
     # Keep the offline pacman.conf for reproducibility, but do not copy the
     # multi-gigabyte repo into the installed system -- it has online mirrors.
@@ -451,11 +471,28 @@ PAC
 sed -i 's/^MODULES=.*/MODULES=(btrfs)/' /etc/mkinitcpio.conf
 sed -i 's|^BINARIES=.*|BINARIES=(/usr/bin/btrfs)|' /etc/mkinitcpio.conf
 if [[ "$ENCRYPT" == "true" ]]; then
-  sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+  sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap block plymouth encrypt filesystems fsck)/' /etc/mkinitcpio.conf
 else
-  sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap block filesystems fsck)/' /etc/mkinitcpio.conf
+  sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap block plymouth filesystems fsck)/' /etc/mkinitcpio.conf
 fi
 printf 'COMPRESSION="zstd"\n' >> /etc/mkinitcpio.conf
+# Select the Aequalyn Plymouth theme and size its bar to this machine before
+# the initramfs is built: the plymouth hook embeds both the default theme
+# (from /etc/plymouth/plymouthd.conf) and the theme's BOOT_SECONDS.
+if [[ -d /usr/share/plymouth/themes/aequalyn ]]; then
+    if plymouth-set-default-theme aequalyn >/dev/null 2>&1; then
+        ok "Plymouth theme aequalyn selected"
+    else
+        warn "could not select the aequalyn Plymouth theme"
+    fi
+    if [[ -x /usr/local/bin/aequalyn-plymouth-calibrate ]]; then
+        if ! /usr/local/bin/aequalyn-plymouth-calibrate; then
+            warn "Plymouth calibration failed; keeping the theme default"
+        fi
+    fi
+else
+    warn "aequalyn Plymouth theme not staged; the splash stays on the default"
+fi
 # mkinitcpio is CPU-bound and runs inside the chroot on the live system, so a
 # full-priority run can starve the QML installer's event loop (Quickshell shows
 # "Application Not Responding"). Run it at a low CPU/IO priority so the UI
@@ -704,6 +741,9 @@ if [[ -d /usr/share/fonts/qylock ]]; then
     mkdir -p /mnt/usr/share/fonts/qylock
     cp -r /usr/share/fonts/qylock/. /mnt/usr/share/fonts/qylock/ 2>/dev/null || true
 fi
+# Plymouth boot splash theme is staged before the chroot, so the initramfs
+# carries it and the calibrated bar; re-copying it here would reset the
+# per-machine BOOT_SECONDS.
 # Default SDDM theme: Aequalyn.
 mkdir -p /mnt/etc/sddm.conf.d
 printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
