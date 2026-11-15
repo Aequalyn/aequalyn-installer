@@ -615,6 +615,12 @@ if [[ -f /usr/lib/systemd/system/limine-snapper-sync.service ]]; then
   systemctl enable limine-snapper-sync.service 2>/dev/null || true
 fi
 
+# Start gnome-keyring for every user (needed so secrets are available on
+# autologin, where no password is typed to unlock it).
+mkdir -p /mnt/etc/systemd/user/default.target.wants /mnt/etc/systemd/user/sockets.target.wants
+ln -sf /usr/lib/systemd/user/gnome-keyring-daemon.service /mnt/etc/systemd/user/default.target.wants/gnome-keyring-daemon.service 2>/dev/null || true
+ln -sf /usr/lib/systemd/user/gnome-keyring-daemon.socket /mnt/etc/systemd/user/sockets.target.wants/gnome-keyring-daemon.socket 2>/dev/null || true
+
 # Don't let Nextcloud autostart on every boot (issue 5).
 if [[ -f /usr/share/applications/com.nextcloud.desktopclient.nextcloud.desktop ]]; then
   sed -i '/^\[Desktop Entry\]/a Hidden=true' /usr/share/applications/com.nextcloud.desktopclient.nextcloud.desktop
