@@ -65,6 +65,7 @@ Scope {
     property string browser: "chromium"
     property bool flatpak: false
     property bool seedWebapps: true
+    property bool installLockscreens: false
     property string source: "auto"
     property string editor: "nano"
 
@@ -402,7 +403,7 @@ Scope {
         id: applyProc
         running: false
         command: ["bash", root.applyScript, root.configPath, root.password, root.logFile]
-        environment: ({ "ASSUME_YES": "1", "AEQUALYN_NO_REBOOT": "1", "AEQUALYN_TEE_LOG": "1" })
+        environment: ({ "ASSUME_YES": "1", "AEQUALYN_NO_REBOOT": "1", "AEQUALYN_TEE_LOG": "1", "AEQUALYN_INSTALL_LOCKSCREENS": root.installLockscreens ? "1" : "0" })
         stdout: SplitParser { onRead: (line) => { root.appendLog(line); } }
         stderr: SplitParser { onRead: (line) => { root.appendLog(line); } }
         onExited: (code) => {
@@ -908,6 +909,8 @@ Scope {
                                     CheckBox { enabled: !root.locked; text: "Seed web apps"; checked: root.seedWebapps; onToggled: root.seedWebapps = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
                                     Text { text: "Adds Reddit, ChatGPT, YouTube, YouTube Music, WhatsApp, Gmail and GitHub, on Super + Shift + D/G/T/Y/H/E/B. The browser chosen above opens them; it can be changed later in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     CheckBox { enabled: !root.locked; text: "Enable Flatpak"; checked: root.flatpak; onToggled: root.flatpak = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
+                                    CheckBox { enabled: !root.locked; text: "Install SDDM lock screens (~400 MB download, ~600 MB disk)"; checked: root.installLockscreens; onToggled: root.installLockscreens = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
+                                    Text { text: "Optional SDDM login themes (echo, pixie, qylock, ...). If skipped, the Lock Screens page is hidden in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     Text { text: "Enable Flatpak application support."; color: root.textMuted; font.pixelSize: 11 }
                                     FieldLabel { text: "PACKAGE SOURCE" }
                                     Text { text: "Where packages are installed from."; color: root.textMuted; font.pixelSize: 11 }

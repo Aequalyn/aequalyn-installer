@@ -693,6 +693,12 @@ if [[ -d /usr/share/fonts/qylock ]]; then
     mkdir -p /mnt/usr/share/fonts/qylock
     cp -r /usr/share/fonts/qylock/. /mnt/usr/share/fonts/qylock/ 2>/dev/null || true
 fi
+# Marker for the optional SDDM lock-screen theme pack: the Settings app only
+# shows the Lock Screens page when this file exists.
+if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
+    mkdir -p /mnt/usr/share/aequalyn
+    touch /mnt/usr/share/aequalyn/lockscreens.enabled
+fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
 # settings.json from [aequalyn] section
