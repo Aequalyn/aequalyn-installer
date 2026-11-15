@@ -680,6 +680,11 @@ done
 if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-provision-user" ]]; then
     cp "$AEQUALYN_ROOT/bin/aequalyn-provision-user" "/mnt/usr/local/bin/aequalyn-provision-user"
 fi
+# aequalyn-ai-tool lives in bin/ too.
+if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-ai-tool" ]]; then
+    cp "$AEQUALYN_ROOT/bin/aequalyn-ai-tool" "/mnt/usr/local/bin/aequalyn-ai-tool"
+    chmod 755 "/mnt/usr/local/bin/aequalyn-ai-tool"
+fi
 # SDDM lock-screen themes + helper (live ISO ships a few in /usr/share/sddm/themes).
 if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-sddm" ]]; then
     cp "$AEQUALYN_ROOT/bin/aequalyn-sddm" "/mnt/usr/local/bin/aequalyn-sddm"
@@ -700,7 +705,7 @@ printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
 # shows the Lock Screens page when this file exists.
 if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
     mkdir -p /mnt/usr/share/aequalyn
-    touch /mnt/usr/share/aequalyn/lockscreens.enabled
+    printf '1\n' > /mnt/usr/share/aequalyn/lockscreens.enabled
 fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
