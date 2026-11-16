@@ -64,7 +64,17 @@ Scope {
     property bool encrypt: false
     property bool chainloadWindows: false
     property int efiSizeMb: 2048
-    onModeChanged: { if (root.mode !== "dualboot") root.chainloadWindows = false; }
+    onModeChanged: { if (root.mode !== "dualboot") root.chainloadWindows = false; root.refreshPlan(); }
+    onSelectedDiskChanged: root.refreshPlan()
+    onEncryptChanged: root.refreshPlan()
+    onEfiSizeMbChanged: root.refreshPlan()
+
+    // Preview of what the install does to the disk (lib/plan.sh, read-only).
+    property string planScript: root.installerDir + "/lib/plan.sh"
+    property var planCur: []
+    property var planNotes: []
+    property bool planBlocked: false
+    property bool planPending: false
 
     property bool profMinimal: true
     property bool profStudent: false
@@ -128,7 +138,7 @@ Scope {
     property string repairAfter: "quit"
     readonly property bool step0Valid: true
     readonly property bool step1Valid: root.hostname.trim() !== "" && root.username.trim() !== "" && root.timezone.trim() !== "" && root.password !== "" && root.password === root.passwordConfirm
-    readonly property bool step2Valid: root.selectedDisk !== ""
+    readonly property bool step2Valid: root.selectedDisk !== "" && !root.planBlocked
     readonly property bool step3Valid: root.profMinimal || root.profStudent || root.profDev || root.profGaming || root.profCreative
     readonly property bool step4Valid: true
     readonly property int maxAllowedStep: root.locked ? 6 : (root.imported ? 5 :
@@ -311,6 +321,13 @@ Scope {
             root.configState = 2;
             root.saveConfig("save");
         }
+    }
+
+    function refreshPlan() {
+        if (root.selectedDisk === "") { root.planCur = []; root.planNotes = []; root.planBlocked = false; return; }
+        if (planProc.running) { root.planPending = true; return; }
+        planProc.command = ["bash", root.planScript, root.selectedDisk, root.mode, String(root.efiSizeMb), root.encrypt ? "1" : "0"];
+        planProc.running = true;
     }
 
     function abortApply(msg) {
@@ -679,6 +696,31 @@ Scope {
         onExited: (code) => {
             const dest = root.liveHome + "/" + root.logFile.split("/").pop();
             root.statusText += code === 0 ? " Copied to " + dest + "." : " Could not copy the log to " + dest + " (exit " + code + ").";
+        }
+    }
+
+    Process {
+        id: planProc
+        running: false
+        command: ["true"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const cur = [];
+                const notes = [];
+                for (const line of (text || "").split("\n")) {
+                    const f = line.split("\t");
+                    if (f[0] === "cur") cur.push({ name: f[1], size: f[2], fs: f[3], label: f[4] });
+                    else if (f[0] === "plan" || f[0] === "warn" || f[0] === "block") notes.push({ kind: f[0], text: f.slice(1).join("\t") });
+                }
+                root.planCur = cur;
+                root.planNotes = notes;
+                root.planBlocked = notes.some(n => n.kind === "block");
+            }
+        }
+        stderr: StdioCollector { onStreamFinished: { if (text) console.log("plan.sh:", text.trim()); } }
+        onExited: (code) => {
+            if (code !== 0) { root.planBlocked = true; root.planNotes = [{ kind: "block", text: "Could not read the disk layout (exit " + code + ")." }]; }
+            if (root.planPending) { root.planPending = false; root.refreshPlan(); }
         }
     }
 
@@ -1349,6 +1391,47 @@ Scope {
                                         }
                                     }
                                     Text { text: "2 GiB (2048 MB) recommended: the ESP holds the kernel, initramfs and bootloader, and keeps room for snapshots/firmware updates."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+
+                                    // Preview of the disk changes. Read-only; it mirrors apply.sh.
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.topMargin: 8
+                                        radius: 12
+                                        color: root.bgSurface
+                                        border.color: root.planBlocked ? root.warn : root.border
+                                        implicitHeight: planCol.implicitHeight + 24
+                                        ColumnLayout {
+                                            id: planCol
+                                            anchors.fill: parent
+                                            anchors.margins: 12
+                                            spacing: 6
+                                            Text { text: "WHAT WILL HAPPEN TO " + root.selectedDisk; color: root.textMuted; font.pixelSize: 11; font.weight: Font.DemiBold; visible: root.selectedDisk !== "" }
+                                            Repeater {
+                                                model: root.planCur
+                                                delegate: Text {
+                                                    required property var modelData
+                                                    text: "  " + modelData.name.replace("/dev/", "") + "   " + modelData.size + " GiB   " + modelData.fs + "   " + modelData.label
+                                                    color: root.textMuted
+                                                    font.pixelSize: 11
+                                                    font.family: "monospace"
+                                                    Layout.fillWidth: true
+                                                    wrapMode: Text.WrapAnywhere
+                                                }
+                                            }
+                                            Repeater {
+                                                model: root.planNotes
+                                                delegate: Text {
+                                                    required property var modelData
+                                                    text: (modelData.kind === "plan" ? "→ " : (modelData.kind === "warn" ? "! " : "✗ ")) + modelData.text
+                                                    color: modelData.kind === "plan" ? root.textPrimary : root.warn
+                                                    font.pixelSize: 12
+                                                    font.weight: modelData.kind === "block" ? Font.DemiBold : Font.Normal
+                                                    wrapMode: Text.WordWrap
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

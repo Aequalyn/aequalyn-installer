@@ -100,7 +100,7 @@ The footer has **Back** on the left and **Next** on the right. Back from the fir
 |---|------|--------------|-------|
 | 1 | **Welcome** | Reads the hardware proposal (firmware, CPU, GPU, memory, disks, Windows EFI, profiles, mode). | Shows the saved `install.toml` path. Re-detect runs the detection again. |
 | 2 | **Identity** | Hostname, username, timezone, console keymap, password. | Timezone is picked on the globe (see 4.2). The password is used for the user, root and the LUKS passphrase, and is never written to `install.toml`. |
-| 3 | **Disk** | Target disk, install mode, LUKS2 encryption, EFI partition size. | Modes: `fullwipe` (erase the disk), `dualboot` (use the largest free region and keep Windows), `manual`. The live USB disk is never listed. |
+| 3 | **Disk** | Target disk, install mode, LUKS2 encryption, EFI partition size. The **What will happen** panel lists the current partitions and every change the install will make. | Modes: `fullwipe` (erase the disk), `dualboot` (use the largest free region and keep Windows), `manual`. The live USB disk is never listed. `dualboot` needs 12 GiB of unallocated space: without it the panel says so and Next stays disabled. |
 | 4 | **Packages** | Profiles (minimal, student, dev, gaming, creative), browser, web apps, Flatpak, lock screens, package source, terminal editor. | At least one profile is required. |
 | 5 | **Aequalyn** | Colour mode and whether GTK apps follow the theme. Dry run option. | Dry run writes `install.toml` and stops before partitioning. |
 | 6 | **Review** | The generated `install.toml`, read-only, and the **Install** button. | The Install button is the only way to start an install. |
