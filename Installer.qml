@@ -76,6 +76,21 @@ Scope {
     property bool planBlocked: false
     property bool planPending: false
 
+    // Typed confirmation: the user must type the target disk's name before any install mode runs.
+    property string confirmText: ""
+    readonly property string diskShort: root.selectedDisk.replace("/dev/", "")
+    readonly property bool confirmed: root.diskShort !== "" && root.confirmText === root.diskShort
+    readonly property bool targetHasWindows: !!(root.planCur.some(p => p.fs === "ntfs") ||
+        (root.detect.win_efi && root.selectedDisk !== "" && String(root.detect.win_efi).indexOf(root.selectedDisk) === 0))
+    readonly property string confirmHeadline: root.mode === "fullwipe" ? "Everything on " + root.selectedDisk + " will be erased." :
+        (root.mode === "dualboot" ? "Existing partitions on " + root.selectedDisk + " are kept." :
+        "The partitions named in install.toml on " + root.selectedDisk + " will be used.")
+    readonly property string confirmDetail: root.mode === "fullwipe" ?
+        (root.targetHasWindows ? "Windows is on this disk and will be erased with everything else." : "No Windows partitions were found on this disk.") :
+        (root.mode === "dualboot" ?
+            "Only the unallocated space is partitioned. Shrink Windows in Disk Management first if there is no free space. " + (root.targetHasWindows ? "Windows was found on this disk." : "No Windows partitions were found on this disk.") :
+            "The partitions may be formatted. Check efi_device and root_device in install.toml.")
+
     property bool profMinimal: true
     property bool profStudent: false
     property bool profDev: false
@@ -442,6 +457,10 @@ Scope {
         }
         if (root.selectedDisk === "") {
             root.statusText = "No disk selected.";
+            return;
+        }
+        if (!root.confirmed) {
+            root.statusText = "Type " + root.diskShort + " to confirm.";
             return;
         }
         if (writeProc.running) {
@@ -1557,8 +1576,45 @@ Scope {
                                         Text { text: "Imported configs do not store passwords. Enter one before applying."; color: root.textMuted; font.pixelSize: 11 }
                                     }
 
+                                    // Typed confirmation before anything touches the disk, in every mode.
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        radius: 12
+                                        color: root.bgSurface
+                                        border.color: root.warn
+                                        implicitHeight: confirmCol.implicitHeight + 24
+                                        ColumnLayout {
+                                            id: confirmCol
+                                            anchors.fill: parent
+                                            anchors.margins: 12
+                                            spacing: 6
+                                            Text {
+                                                text: root.confirmHeadline
+                                                color: root.warn
+                                                font.pixelSize: 13
+                                                font.weight: Font.DemiBold
+                                                wrapMode: Text.WordWrap
+                                                Layout.fillWidth: true
+                                            }
+                                            Text {
+                                                text: root.confirmDetail
+                                                color: root.textSecondary
+                                                font.pixelSize: 12
+                                                wrapMode: Text.WordWrap
+                                                Layout.fillWidth: true
+                                            }
+                                            FieldLabel { text: "TYPE " + root.diskShort + " TO CONFIRM" }
+                                            TextFieldStyled {
+                                                Layout.fillWidth: true
+                                                placeholderText: root.diskShort
+                                                enabled: !(root.writing || root.applying) && !root.locked
+                                                onTextChanged: root.confirmText = text
+                                            }
+                                        }
+                                    }
+
                                     Button {
-                                        enabled: !(root.writing || root.applying) && !root.locked
+                                        enabled: !(root.writing || root.applying) && !root.locked && root.confirmed
                                         text: root.writing ? "Writing..." : (root.applying ? "Applying..." : (root.dryRun ? "Write config (dry run)" : "Install"))
                                         onClicked: root.startApply()
                                         background: Rectangle {
