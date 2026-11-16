@@ -278,12 +278,16 @@ if [[ -z "$CONFIG" ]]; then
     chosen=$(ui_choose "Select the target disk" "${disks_list[@]}")
     disk_v=${chosen%% *}
 
-    if [[ -n "${WIN_EFI:-}" ]]; then
+    if [[ -n "${WIN_EFI:-}" && "$WIN_EFI" == "$disk_v"* ]]; then
         mode_v=$(ui_choose "Windows EFI found on $WIN_EFI. Install mode?" \
             "dualboot" "fullwipe" "manual")
     else
+        [[ -n "${WIN_EFI:-}" ]] && \
+            ui_info "Windows is on another disk ($WIN_EFI); fullwipe will not chainload it."
         mode_v=$(ui_choose "Install mode" "fullwipe" "dualboot" "manual")
     fi
+    chain_v=false
+    [[ "$mode_v" == "dualboot" && -n "${WIN_EFI:-}" && "$WIN_EFI" == "$disk_v"* ]] && chain_v=true
     encrypt_v=$(ui_choose "Encrypt root with LUKS2?" "yes" "no")
     [[ "$encrypt_v" == "yes" ]] && encrypt_v=true || encrypt_v=false
 
@@ -305,13 +309,14 @@ if [[ -z "$CONFIG" ]]; then
     # Rewrite the config with the answers (keeping the documented schema).
     python3 - "$CONFIG" "$hostname_v" "$username_v" "$timezone_v" "$keymap_v" \
                   "$disk_v" "$mode_v" "$encrypt_v" "$profiles_v" "$browser_v" \
-                  "$flatpak_v" "$source_v" "$theme_v" "$apps_v" "$editor_v" <<'PY'
+                  "$flatpak_v" "$source_v" "$theme_v" "$apps_v" "$editor_v" "$chain_v" <<'PY'
 import sys, tomllib, pathlib
 f = pathlib.Path(sys.argv[1])
 d = tomllib.loads(f.read_text())
-(h, u, tz, km, disk, mode, enc, profiles, browser, flatpak, src, theme, apps, editor) = sys.argv[2:]
+(h, u, tz, km, disk, mode, enc, profiles, browser, flatpak, src, theme, apps, editor, chain) = sys.argv[2:]
 d.setdefault("system", {}).update(hostname=h, username=u, timezone=tz, keymap=km, password_set=True)
 d.setdefault("disk", {}).update(device=disk, mode=mode, encrypt=(enc=="true"))
+d.setdefault("boot", {}).update(chainload_windows=(chain=="true"))
 d.setdefault("packages", {}).update(profiles=profiles.split(), browser=browser,
                                     flatpak=(flatpak=="true"), source=src,
                                     editor=editor)
@@ -387,9 +392,9 @@ if [[ $SIMULATE -eq 1 ]]; then
     IMG=/tmp/aequalyn-sim.img
     rm -f "$IMG"
     truncate -s 4G "$IMG"
-    LOOP=$(losetup -f --show "$IMG")
+    LOOP=$(losetup -f --show -P "$IMG")
     export AEQUALYN_SIMULATE=true
-    trap 'losetup -d "$LOOP" 2>/dev/null || true; rm -f "$IMG"' EXIT
+    trap 'umount -R /mnt 2>/dev/null || true; losetup -d "$LOOP" 2>/dev/null || true; rm -f "$IMG"' EXIT
     if [[ -z "$CONFIG" ]]; then
         bash "$SELF_DIR/aequalyn-detect" --toml > /tmp/aequalyn-sim.toml
         CONFIG=/tmp/aequalyn-sim.toml
