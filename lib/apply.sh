@@ -915,6 +915,7 @@ if [[ -f /usr/lib/systemd/system/limine-snapper-sync.service ]]; then
 fi
 u=$(id -un 1000 2>/dev/null || true)
 [[ -n "$u" ]] && su - "$u" -c 'aequalyn-theme "$HOME/Pictures/Wallpapers/beach.jpg"' >/dev/null 2>&1 || true
+rm -f "$C"
 systemctl disable aequalyn-first-boot.service >/dev/null 2>&1 || true
 EOF
 chmod 755 /mnt/usr/local/bin/aequalyn-first-boot
