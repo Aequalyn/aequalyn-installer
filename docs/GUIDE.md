@@ -184,7 +184,7 @@ What each repair does, inside `arch-chroot /mnt`:
 | Option | What runs | When to use it |
 |--------|-----------|----------------|
 | Reinitialize archlinux-keyring | Removes `/etc/pacman.d/gnupg`, runs `pacman-key --init` and `--populate archlinux`, then `pacman -Sy archlinux-keyring` | "invalid or corrupted package", signature errors |
-| Reinstall linux kernel | `pacman -S linux`, then `mkinitcpio -P` | Broken kernel or initramfs |
+| Reinstall linux kernel | `pacman -S linux`, then `mkinitcpio -P` (the installed `limine-mkinitcpio-hook` regenerates `limine.conf`), then `limine-update` to refresh the Limine entries | Broken kernel or initramfs |
 | Reinstall bootloader | `pacman -S limine`, copies Limine to `/boot/EFI`, runs `limine-update` (BIOS: `limine bios-install`) | Missing or broken boot entry |
 
 Mounting follows the same layout as the installer. Btrfs root is mounted from `@`, with `@home`, `@var`, `@log`, `@pkg`, `@.snapshots` and `@root` mounted when present. The EFI partition labelled `AEQUALYN` goes to `/mnt/boot`.
