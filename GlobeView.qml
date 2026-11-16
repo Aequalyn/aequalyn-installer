@@ -576,9 +576,14 @@ Item {
     }
 
     // interaction
+    // Plain wheel scrolls the page this globe sits in; Ctrl+wheel zooms the globe.
     WheelHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        onWheel: function(e) { root.zoomBy(Math.pow(1.0025, e.angleDelta.y)); e.accepted = true }
+        onWheel: function(e) {
+            if (!(e.modifiers & Qt.ControlModifier)) { e.accepted = false; return; }
+            root.zoomBy(Math.pow(1.0025, e.angleDelta.y));
+            e.accepted = true;
+        }
     }
 
     MouseArea {
