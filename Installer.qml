@@ -325,6 +325,7 @@ Scope {
     function saveConfig(reason) {
         if (writeProc.running) return false;
         writeProc.reason = reason;
+        writeProc.command = ["bash", "-c", "printf '%s' \"$1\" > \"$2\"", "bash", root.generateToml(), root.configPath];
         root.writing = reason === "apply";
         writeProc.running = true;
         return true;
@@ -601,10 +602,10 @@ Scope {
     Process {
         id: writeProc
         running: false
-        stdinEnabled: true
         property string reason: "save"
-        command: ["tee", root.configPath]
-        onStarted: { write(root.generateToml()); stdinEnabled = false; }
+        // The content is passed as an argument, not on stdin: a tee fed through
+        // stdin kept running after the write and blocked every later save.
+        command: ["bash", "-c", "printf '%s' \"$1\" > \"$2\"", "bash", "", root.configPath]
         stdout: StdioCollector { onStreamFinished: {} }
         stderr: StdioCollector {
             onStreamFinished: {
@@ -936,17 +937,15 @@ Scope {
 
     // ---- window geometry persistence ----
     function saveGeom() {
+        const geom = "x=" + win.x + "\ny=" + win.y + "\nwidth=" + win.width + "\nheight=" + win.height + "\n";
+        saveGeomProc.command = ["bash", "-c", "mkdir -p \"$(dirname \"$1\")\" && printf '%s' \"$2\" > \"$1\"", "bash", root.geomPath, geom];
         saveGeomProc.running = true;
     }
 
     Process {
         id: saveGeomProc
         running: false
-        stdinEnabled: true
-        command: ["bash", "-c", "mkdir -p \"$(dirname " + JSON.stringify(root.geomPath) + ")\" && tee " + JSON.stringify(root.geomPath)]
-        onStarted: {
-            write("x=" + win.x + "\ny=" + win.y + "\nwidth=" + win.width + "\nheight=" + win.height + "\n");
-        }
+        command: ["true"]
     }
 
     FileView {
