@@ -147,13 +147,15 @@ do_run() {
             arch-chroot "$MNT" bash -c '
                 set -e
                 pacman -S --noconfirm linux
-                # The installed system uses limine-mkinitcpio-hook: mkinitcpio
-                # regenerates /boot/limine.conf and the kernel entries via the hook.
-                mkinitcpio -P
-                # Refresh the Limine entries and EFI binary (limine-entry-tool)
-                # the same way apply.sh does, so the new kernel boots.
-                if command -v limine-update >/dev/null 2>&1; then
-                    limine-update
+                # limine-mkinitcpio-hook replaces mkinitcpio with a wrapper that
+                # prompts "run limine-mkinitcpio now?" after -P. With no TTY in
+                # arch-chroot that read blocks forever, so call the non-interactive
+                # limine-mkinitcpio directly. It rebuilds the initramfs and the
+                # Limine kernel entries. Fall back to plain mkinitcpio otherwise.
+                if command -v limine-mkinitcpio >/dev/null 2>&1; then
+                    limine-mkinitcpio
+                else
+                    /usr/bin/mkinitcpio -P
                 fi
             '
             ;;
