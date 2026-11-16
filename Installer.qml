@@ -26,9 +26,17 @@ Scope {
     property string detectScript: root.installerDir + "/aequalyn-detect"
     property string applyScript: root.installerDir + "/lib/apply.sh"
     property bool isRoot: Quickshell.env("USER") === "root"
-    property string configPath: root.isRoot ? "/root/install.toml" : (Quickshell.env("HOME") + "/install.toml")
+    // sudo resets HOME to /root, which the live user's file manager cannot open,
+    // so the config always lives in the live user's home.
+    property string liveHome: Quickshell.env("AEQUALYN_LIVE_HOME") || "/home/live"
+    property string configPath: root.liveHome + "/install.toml"
+    // Copy the applier reads. Only synced from configPath right before install.
+    property string rootConfigPath: "/root/install.toml"
     property string logFile: root.isRoot ? "/root/aequalyn-install_qml.log" : (Quickshell.env("HOME") + "/aequalyn-install_qml.log")
 
+    // page: 0 splash, 1 install/repair choice, 2..8 install steps (step + 2).
+    property int page: 0
+    property string flow: "install"
     property int step: 0
     readonly property var stepNames: ["Welcome", "Identity", "Disk", "Packages", "Aequalyn", "Review", "Finish"]
     readonly property var stepDescriptions: [
@@ -86,10 +94,38 @@ Scope {
     property bool locked: false
     property var timezones: []
     property var filteredTimezones: []
-    onStepChanged: { if (root.step > root.maxAllowedStep) root.step = root.maxAllowedStep; }
-    onMaxAllowedStepChanged: { if (root.step > root.maxAllowedStep) root.step = root.maxAllowedStep; }
+    onMaxAllowedStepChanged: { if (root.page >= 2 && root.step > root.maxAllowedStep) root.gotoStep(root.maxAllowedStep); }
     property string geomPath: Quickshell.env("HOME") + "/.config/aequalyn/installer-geometry.conf"
     property bool imported: false
+    // configState: -1 unknown, 0 no install.toml at startup, 1 loaded from it,
+    // 2 proposal written to it.
+    property int configState: -1
+    property bool configLoaded: false
+    property bool detectDone: false
+    readonly property bool busy: root.writing || root.applying || root.repairProbing || root.repairMounting || root.repairRunning || root.repairUnmounting
+    readonly property var repairTitles: ["Select disk", "Mount & unlock", "Choose repairs", "Running"]
+    readonly property string pageTitle: root.page === 0 ? "Welcome" : (root.page === 1 ? "Get started" : (root.page >= 9 ? "Repair · " + root.repairTitles[root.page - 9] : root.stepNames[root.step]))
+
+    // ---- repair flow state ----
+    property string repairScript: root.installerDir + "/lib/repair.sh"
+    property string repairDisk: ""
+    property string repairRoot: ""
+    property string repairEsp: ""
+    property bool repairEncrypted: false
+    property string repairPass: ""
+    property bool repairProbing: false
+    property bool repairMounting: false
+    property bool repairMounted: false
+    property bool repairKeyring: true
+    property bool repairKernel: true
+    property bool repairBootloader: false
+    property var repairPlan: []
+    property var repairStates: ({})
+    property var repairQueue: []
+    property string repairCurrent: ""
+    property bool repairRunning: false
+    property bool repairUnmounting: false
+    property string repairAfter: "quit"
     readonly property bool step0Valid: true
     readonly property bool step1Valid: root.hostname.trim() !== "" && root.username.trim() !== "" && root.timezone.trim() !== "" && root.password !== "" && root.password === root.passwordConfirm
     readonly property bool step2Valid: root.selectedDisk !== ""
@@ -131,7 +167,7 @@ Scope {
         return out;
     }
 
-    function applyImport(d) {
+    function applyImport(d, jump) {
         const sys = d.system || {};
         if (sys.hostname) root.hostname = sys.hostname;
         if (sys.username) root.username = sys.username;
@@ -169,8 +205,129 @@ Scope {
         const ae = d.aequalyn || {};
         if (ae.theme_mode) root.themeMode = ae.theme_mode;
         root.themeApps = ae.theme_apps !== false;
-        root.imported = true;
+        root.configLoaded = true;
+        if (jump) {
+            // Set directly, not through gotoStep: the loaded file is copied
+            // verbatim and must not be rewritten from state at the same time.
+            root.imported = true;
+            root.step = 5;
+            root.page = 7;
+        }
+    }
+
+    function gotoPage(p) {
+        root.page = p;
+    }
+
+    // Moving between install steps saves the current choices, so install.toml
+    // always reflects what the user has reviewed.
+    function gotoStep(n) {
+        root.step = Math.max(0, Math.min(n, root.maxAllowedStep));
+        root.page = 2 + root.step;
+        root.saveConfig("save");
+    }
+
+    function proceedFromMode() {
+        if (root.flow === "install") root.gotoStep(0);
+        else root.gotoRepair(9);
+    }
+
+    function gotoRepair(p) {
+        root.page = p;
+    }
+
+    function startProbe() {
+        root.repairProbing = true;
+        root.repairRoot = "";
+        root.repairEsp = "";
+        root.repairEncrypted = false;
+        root.repairMounted = false;
+        root.repairPass = "";
+        root.statusText = "";
+        repairProbeProc.command = ["bash", root.repairScript, "probe", root.repairDisk];
+        repairProbeProc.running = true;
+    }
+
+    function startMount() {
+        root.statusText = "";
+        root.clearLog();
+        root.repairMounting = true;
+        repairMountProc.command = ["bash", root.repairScript, "mount", root.repairDisk];
+        repairMountProc.running = true;
+    }
+
+    function startRepairs() {
+        const plan = [];
+        if (root.repairKeyring) plan.push({ id: "KEYRING", label: "Reinitialize archlinux-keyring" });
+        if (root.repairKernel) plan.push({ id: "KERNEL", label: "Reinstall linux kernel" });
+        if (root.repairBootloader) plan.push({ id: "BOOTLOADER", label: "Reinstall bootloader", disk: root.repairDisk });
+        if (plan.length === 0) { root.statusText = "Select at least one repair."; return; }
+        root.statusText = "";
+        root.clearLog();
+        root.repairPlan = plan;
+        root.repairStates = {};
+        root.repairQueue = plan.slice();
+        root.repairRunning = true;
+        root.gotoRepair(12);
+        root.repairNextStep();
+    }
+
+    function repairNextStep() {
+        if (root.repairQueue.length === 0) {
+            root.repairRunning = false;
+            root.statusText = "Repairs finished. Unmount and reboot when you are ready.";
+            return;
+        }
+        const q = root.repairQueue.slice();
+        const item = q.shift();
+        root.repairQueue = q;
+        root.repairCurrent = item.id;
+        const st = Object.assign({}, root.repairStates);
+        st[item.id] = "running";
+        root.repairStates = st;
+        repairRunProc.command = ["bash", root.repairScript, "run", item.id].concat(item.disk ? [item.disk] : []);
+        repairRunProc.running = true;
+    }
+
+    // Unmounts /mnt, then quits or reboots (repairAfter).
+    function quitRepair(after) {
+        root.repairAfter = after;
+        root.repairUnmounting = true;
+        repairUnmountProc.running = true;
+    }
+
+    function finishRepairExit() {
+        if (root.repairAfter === "reboot") {
+            root.rebooting = true;
+            root.statusText = "Rebooting...";
+            rebootProc.running = true;
+        } else {
+            Qt.quit();
+        }
+    }
+
+    function maybeSaveProposal() {
+        if (root.configState === 0 && root.detectDone) {
+            root.configState = 2;
+            root.saveConfig("save");
+        }
+    }
+
+    function abortApply(msg) {
+        root.locked = false;
+        root.writing = false;
+        root.applying = false;
         root.step = 5;
+        root.page = 7;
+        root.statusText = msg;
+    }
+
+    function saveConfig(reason) {
+        if (writeProc.running) return false;
+        writeProc.reason = reason;
+        root.writing = reason === "apply";
+        writeProc.running = true;
+        return true;
     }
 
     function windowsOnTarget() {
@@ -269,13 +426,17 @@ Scope {
             root.statusText = "No disk selected.";
             return;
         }
+        if (writeProc.running) {
+            root.statusText = "Still saving install.toml, try again.";
+            return;
+        }
         root.locked = true;
         root.clearLog();
         root.installFinished = false;
         root.statusText = "Writing configuration...";
-        root.writing = true;
         root.step = 6;
-        writeProc.running = true;
+        root.page = 8;
+        root.saveConfig("apply");
     }
 
     // ---- processes ----
@@ -287,9 +448,9 @@ Scope {
             onStreamFinished: {
                 try {
                     root.detect = JSON.parse(text || "{}");
-                    // Detection may finish after the user imported a config;
-                    // never overwrite their reviewed choices in that case.
-                    if (!root.imported) {
+                    // Detection may finish after install.toml was loaded;
+                    // never overwrite the saved choices in that case.
+                    if (!root.configLoaded) {
                         root.mode = root.detect.mode || "fullwipe";
                         root.encrypt = root.detect.encrypt === true;
                         root.selectedDisk = root.detect.first_disk || "";
@@ -307,6 +468,8 @@ Scope {
                 } catch (e) {
                     root.statusText = "Detection failed: " + e;
                 }
+                root.detectDone = true;
+                root.maybeSaveProposal();
             }
         }
         onExited: (code) => {
@@ -363,17 +526,24 @@ Scope {
         }
     }
 
+    // Reads a TOML file into the wizard state. jump=true is the Load button
+    // (skip to Review); jump=false is the startup load of install.toml.
     Process {
         id: importProc
         running: false
         property string path: ""
+        property bool jump: true
         command: ["python3", "-c", "import tomllib,json,sys; print(json.dumps(tomllib.load(open(sys.argv[1],'rb'))))", importProc.path]
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
                     const d = JSON.parse(text || "{}");
-                    root.applyImport(d);
-                    root.statusText = "Imported " + importProc.path;
+                    root.applyImport(d, importProc.jump);
+                    root.statusText = importProc.jump ? "Imported " + importProc.path : "";
+                    if (importProc.jump && importProc.path !== root.configPath) {
+                        copyProc.command = ["cp", "-f", importProc.path, root.configPath];
+                        copyProc.running = true;
+                    }
                 } catch (e) {
                     root.statusText = "Import failed: " + e;
                 }
@@ -381,6 +551,31 @@ Scope {
         }
         stderr: StdioCollector { onStreamFinished: { if (text) root.statusText = "Import failed: " + text; } }
         onExited: (code) => { console.log("importProc exited", code, importProc.path); }
+    }
+
+    // Startup check: does install.toml already exist in the live home?
+    Process {
+        id: bootstrapProc
+        running: false
+        command: ["test", "-f", root.configPath]
+        onExited: (code) => {
+            if (code === 0) {
+                root.configState = 1;
+                importProc.jump = false;
+                importProc.path = root.configPath;
+                importProc.running = true;
+            } else {
+                root.configState = 0;
+                root.maybeSaveProposal();
+            }
+        }
+    }
+
+    Process {
+        id: copyProc
+        running: false
+        command: ["true"]
+        stderr: StdioCollector { onStreamFinished: { if (text) root.statusText = "Copy failed: " + text; } }
     }
 
     Process {
@@ -393,33 +588,58 @@ Scope {
                 if (p) {
                     importPathField.text = p;
                     importProc.path = p;
+                    importProc.jump = true;
                     importProc.running = true;
                 }
             }
         }
     }
 
+    // Writes the current choices to install.toml. reason "save" runs on every
+    // wizard navigation; reason "apply" is the Install button and continues
+    // into the applier when the write succeeds.
     Process {
         id: writeProc
         running: false
         stdinEnabled: true
+        property string reason: "save"
         command: ["tee", root.configPath]
         onStarted: { write(root.generateToml()); stdinEnabled = false; }
         stdout: StdioCollector { onStreamFinished: {} }
         stderr: StdioCollector {
             onStreamFinished: {
                 const ls = (text || "").replace(/\n$/, "").split("\n");
-                for (let i = 0; i < ls.length; i++) root.appendLog(ls[i]);
+                for (let i = 0; i < ls.length; i++) if (ls[i] !== "") root.appendLog(ls[i]);
             }
         }
         onExited: (code) => {
             root.writing = false;
             if (code !== 0) {
-                root.statusText = "Failed to write config (exit " + code + ").";
+                const msg = "Failed to write " + root.configPath + " (exit " + code + ").";
+                if (writeProc.reason === "apply") root.abortApply(msg);
+                else root.statusText = msg;
+                return;
+            }
+            if (writeProc.reason !== "apply") return;
+            root.statusText = "Copying install.toml to " + root.rootConfigPath + "...";
+            syncProc.running = true;
+        }
+    }
+
+    // /home/live/install.toml is the only copy the wizard edits. Right before
+    // the applier runs, it is copied over the root copy the applier reads.
+    Process {
+        id: syncProc
+        running: false
+        command: ["cp", "-f", root.configPath, root.rootConfigPath]
+        stderr: StdioCollector { onStreamFinished: { if (text) root.appendLog(text.trim()); } }
+        onExited: (code) => {
+            if (code !== 0) {
+                root.abortApply("Could not copy install.toml to " + root.rootConfigPath + " (exit " + code + "). The installer must run as root.");
                 return;
             }
             if (root.dryRun) {
-                root.statusText = "Dry run complete. Config written to " + root.configPath;
+                root.statusText = "Dry run complete. Config written to " + root.rootConfigPath;
                 return;
             }
             root.statusText = "Applying configuration...";
@@ -431,7 +651,7 @@ Scope {
     Process {
         id: applyProc
         running: false
-        command: ["bash", root.applyScript, root.configPath, root.password, root.logFile]
+        command: ["bash", root.applyScript, root.rootConfigPath, root.password, root.logFile]
         environment: ({ "ASSUME_YES": "1", "AEQUALYN_NO_REBOOT": "1", "AEQUALYN_TEE_LOG": "1", "AEQUALYN_INSTALL_LOCKSCREENS": root.installLockscreens ? "1" : "0" })
         stdout: SplitParser { onRead: (line) => { root.appendLog(line); } }
         stderr: SplitParser { onRead: (line) => { root.appendLog(line); } }
@@ -447,6 +667,80 @@ Scope {
         }
     }
 
+    // ---- repair flow processes (lib/repair.sh) ----
+    Process {
+        id: repairProbeProc
+        running: false
+        command: ["true"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const t = text || "";
+                root.repairEncrypted = /^ENCRYPTED=1$/m.test(t);
+                const r = t.match(/^ROOT=(.*)$/m);
+                const e = t.match(/^ESP=(.*)$/m);
+                root.repairRoot = r ? r[1].trim() : "";
+                root.repairEsp = e ? e[1].trim() : "";
+            }
+        }
+        stderr: StdioCollector { onStreamFinished: { if (text) root.statusText = text.trim(); } }
+        onExited: (code) => {
+            root.repairProbing = false;
+            if (code !== 0 && root.statusText === "") root.statusText = "Could not read " + root.repairDisk + " (exit " + code + ").";
+        }
+    }
+
+    Process {
+        id: repairMountProc
+        running: false
+        stdinEnabled: true
+        command: ["true"]
+        // The passphrase travels on stdin, never on the command line.
+        onStarted: { write(root.repairPass + "\n"); stdinEnabled = false; root.repairPass = ""; repairPassField.text = ""; }
+        stdout: SplitParser { onRead: (line) => root.appendLog(line) }
+        stderr: SplitParser { onRead: (line) => root.appendLog(line) }
+        onExited: (code) => {
+            root.flushLog();
+            root.repairMounting = false;
+            root.repairMounted = code === 0;
+            root.statusText = code === 0 ? "Mounted on /mnt." : "Mount failed (exit " + code + "). See the log.";
+        }
+    }
+
+    Process {
+        id: repairRunProc
+        running: false
+        command: ["true"]
+        stdout: SplitParser { onRead: (line) => root.appendLog(line) }
+        stderr: SplitParser { onRead: (line) => root.appendLog(line) }
+        onExited: (code) => {
+            root.flushLog();
+            const st = Object.assign({}, root.repairStates);
+            st[root.repairCurrent] = code === 0 ? "done" : "failed";
+            root.repairStates = st;
+            if (code !== 0) {
+                root.repairQueue = [];
+                root.repairRunning = false;
+                root.statusText = "Step failed (exit " + code + "). See the log; Quit or Unmount & reboot when ready.";
+                return;
+            }
+            root.repairNextStep();
+        }
+    }
+
+    Process {
+        id: repairUnmountProc
+        running: false
+        command: ["bash", root.repairScript, "unmount"]
+        stdout: SplitParser { onRead: (line) => root.appendLog(line) }
+        stderr: SplitParser { onRead: (line) => root.appendLog(line) }
+        onExited: (code) => {
+            root.flushLog();
+            root.repairUnmounting = false;
+            root.repairMounted = false;
+            root.finishRepairExit();
+        }
+    }
+
     Process {
         id: rebootProc
         running: false
@@ -459,6 +753,7 @@ Scope {
 
     Component.onCompleted: {
         root.detecting = true;
+        bootstrapProc.running = true;
         detectProc.running = true;
         tzListProc.running = true;
         tzProc.running = true;
@@ -509,6 +804,75 @@ Scope {
         }
     }
 
+    component AccentButton: Button {
+        implicitHeight: 40
+        leftPadding: 18
+        rightPadding: 18
+        background: Rectangle { color: parent.enabled ? root.accent : root.bgHover; radius: 12 }
+        contentItem: Text {
+            text: parent.text
+            color: parent.enabled ? root.bgBase : root.textMuted
+            font.weight: Font.DemiBold
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    component GhostButton: Button {
+        implicitHeight: 40
+        leftPadding: 18
+        rightPadding: 18
+        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
+        contentItem: Text {
+            text: parent.text
+            color: parent.enabled ? root.textPrimary : root.textMuted
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // Selectable repair option with a checkbox look.
+    component RepairCard: Rectangle {
+        id: card
+        property string title: ""
+        property string detail: ""
+        property bool checked: false
+        signal toggled()
+        Layout.fillWidth: true
+        implicitHeight: cardCol.implicitHeight + 28
+        radius: 12
+        color: card.checked ? root.bgSelected : root.bgSurface
+        border.color: card.checked ? root.accent : root.border
+        border.width: card.checked ? 2 : 1
+        opacity: enabled ? 1.0 : 0.5
+        RowLayout {
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 12
+            Rectangle {
+                Layout.alignment: Qt.AlignTop
+                width: 20; height: 20; radius: 4
+                color: card.checked ? root.accent : "transparent"
+                border.color: root.accent
+                border.width: 2
+                Text { anchors.centerIn: parent; visible: card.checked; text: "✓"; color: root.bgBase; font.pixelSize: 13; font.bold: true }
+            }
+            ColumnLayout {
+                id: cardCol
+                Layout.fillWidth: true
+                spacing: 4
+                Text { text: card.title; color: root.textPrimary; font.pixelSize: 14; font.weight: Font.DemiBold; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                Text { text: card.detail; color: root.textSecondary; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            }
+        }
+        MouseArea {
+            anchors.fill: parent
+            enabled: card.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: card.toggled()
+        }
+    }
+
     component TextFieldStyled: TextField {
         enabled: !root.locked
         color: root.textPrimary
@@ -551,6 +915,7 @@ Scope {
             console.log("import accepted:", importDialog.selectedFile);
             const path = importDialog.selectedFile.toString().replace("file://", "");
             importProc.path = path;
+            importProc.jump = true;
             importProc.running = true;
         }
     }
@@ -646,27 +1011,29 @@ Scope {
                             }
                             Rectangle { width: 1; height: 28; color: root.border }
                             Text {
-                                text: root.stepNames[root.step]
+                                text: root.pageTitle
                                 color: root.textPrimary
                                 font.pixelSize: 20
                                 font.weight: Font.DemiBold
                             }
                             Item { Layout.fillWidth: true }
                             Text {
+                                visible: root.page >= 2 && root.page <= 8
                                 text: (root.step + 1) + " / " + root.stepNames.length
                                 color: root.textMuted
                                 font.pixelSize: 12
                             }
                             Rectangle {
                                 width: 30; height: 30; radius: 9
-                                color: closeArea.containsMouse ? root.bgHover : "transparent"
+                                opacity: root.busy ? 0.4 : 1.0
+                                color: closeArea.containsMouse && !root.busy ? root.bgHover : "transparent"
                                 Text { anchors.centerIn: parent; text: "✕"; color: root.textSecondary; font.pixelSize: 14 }
                                 MouseArea {
                                     id: closeArea
                                     anchors.fill: parent
                                     hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: Qt.quit()
+                                    cursorShape: root.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                    onClicked: { if (!root.busy) Qt.quit(); }
                                 }
                             }
                         }
@@ -684,9 +1051,76 @@ Scope {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         implicitHeight: 0
-                        currentIndex: root.step
+                        currentIndex: root.page
 
-                        // 0 Welcome
+                        // 0 Splash
+                        Item {
+                            Image {
+                                anchors.fill: parent
+                                source: Qt.resolvedUrl("assets/aequalyn-horizon.svg")
+                                fillMode: Image.PreserveAspectCrop
+                                smooth: true
+                            }
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.top: parent.top
+                                anchors.topMargin: Math.max(16, parent.height * 0.06)
+                                text: "Welcome to Aequalyn"
+                                color: "#142a30"
+                                font.pixelSize: 30
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: Math.max(16, parent.height * 0.1)
+                                text: "Your Distro"
+                                color: "#dfe5e2"
+                                font.pixelSize: 18
+                                font.weight: Font.Medium
+                            }
+                        }
+
+                        // 1 Install or Repair
+                        Item {
+                            ColumnLayout {
+                                anchors.centerIn: parent
+                                width: Math.min(parent.width - 48, 560)
+                                spacing: 16
+                                Text { text: "What would you like to do?"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                Repeater {
+                                    model: [
+                                        { id: "install", title: "Install", desc: "Use this wizard to install Aequalyn on your computer." },
+                                        { id: "repair", title: "Repair", desc: "Allows you to mount your disk and perform repairs or updates." }
+                                    ]
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        implicitHeight: choiceCol.implicitHeight + 32
+                                        radius: 14
+                                        color: root.flow === modelData.id ? root.bgSelected : root.bgSurface
+                                        border.color: root.flow === modelData.id ? root.accent : root.border
+                                        border.width: root.flow === modelData.id ? 2 : 1
+                                        ColumnLayout {
+                                            id: choiceCol
+                                            anchors.fill: parent
+                                            anchors.margins: 16
+                                            spacing: 4
+                                            Text { text: modelData.title; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                            Text { text: modelData.desc; color: root.textSecondary; font.pixelSize: 13; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.flow = modelData.id
+                                        }
+                                    }
+                                }
+                                Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                            }
+                        }
+
+                        // Install step 0: Welcome (hardware)
                         Item {
                             ScrollView {
                                 ScrollBar.vertical.policy: ScrollBar.AlwaysOff
@@ -713,10 +1147,10 @@ Scope {
                                             anchors.margins: 10
                                             spacing: 6
                                             Text { text: "What is install.toml?"; color: root.textPrimary; font.pixelSize: 13; font.weight: Font.DemiBold }
-                                            Text { text: "install.toml is the single configuration contract for the whole install: identity, disk, packages and Aequalyn defaults. The wizard writes it, shows it to you for review, and applies it only after you approve. Re-running with --config install.toml reproduces the same install deterministically."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                            Text { text: "install.toml is the single configuration contract for the whole install: identity, disk, packages and Aequalyn defaults. The proposal below is saved to it, every Next updates it with your choices, and the Install step applies exactly what it contains. Re-running with --config install.toml reproduces the same install deterministically."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                             Text { text: "Where is it?"; color: root.textPrimary; font.pixelSize: 13; font.weight: Font.DemiBold }
-                                            Text { text: "It will be written to: " + root.configPath; color: root.accent; font.pixelSize: 12; font.family: "monospace"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                            Text { text: "You can edit it by hand before applying, or pass an existing file with aequalyn-install --config FILE."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                            Text { text: "Saved to: " + root.configPath; color: root.accent; font.pixelSize: 12; font.family: "monospace"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                            Text { text: "You can edit it by hand before applying, or load another file with the field below."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                         }
                                     }
 
@@ -777,6 +1211,7 @@ Scope {
                                             onClicked: {
                                                 if (importPathField.text.trim() === "") { root.statusText = "Enter a path to install.toml"; return; }
                                                 importProc.path = importPathField.text.trim();
+                                                importProc.jump = true;
                                                 importProc.running = true;
                                             }
                                             background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
@@ -798,7 +1233,7 @@ Scope {
                         // 1 Identity
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -823,7 +1258,7 @@ Scope {
                                         onTimezoneSelected: (tz) => root.timezone = tz
                                     }
                                     Text { text: "Selected: " + root.timezone; color: root.textPrimary; font.pixelSize: 12 }
-                                    Text { text: "Region/City, e.g. Europe/Bucharest."; color: root.textMuted; font.pixelSize: 11 }
+                                    Text { text: "Region/City, e.g. Europe/Bucharest. Scroll the page with the wheel; hold Ctrl and scroll over the globe to zoom."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     Button {
                                         text: "Use system timezone (timedatectl)"
                                         enabled: !root.locked
@@ -1002,7 +1437,7 @@ Scope {
                                     width: parent.width
                                     spacing: 8
                                     Text { text: "Review install.toml"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
-                                    Text { text: "Nothing has been written to disk yet. Confirm to apply."; color: root.textMuted; font.pixelSize: 12 }
+                                    Text { text: "Saved to " + root.configPath + ". Install applies exactly this file."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     TextArea {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 230
@@ -1075,13 +1510,206 @@ Scope {
                                         contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                     }
                                     Button {
-                                        text: "Close installer"
-                                        enabled: !root.rebooting
+                                        text: "Quit"
+                                        enabled: !root.rebooting && !root.busy
                                         onClicked: { root.saveGeom(); Qt.quit(); }
-                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                        contentItem: Text { text: parent.text; color: root.textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border; opacity: parent.enabled ? 1.0 : 0.4 }
+                                        contentItem: Text { text: parent.text; color: parent.enabled ? root.textPrimary : root.textMuted; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                     }
                                     Item { Layout.fillWidth: true }
+                                }
+                            }
+                        }
+
+                        // 9 Repair: select disk
+                        Item {
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 10
+                                Text { text: "Select the disk to repair"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                Text { text: "Pick the disk that holds your Aequalyn install. The live USB is hidden."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Item { Layout.fillWidth: true }
+                                    GhostButton { text: "Refresh"; enabled: !root.busy; onClicked: lsblkProc.running = true }
+                                }
+                                Text { visible: root.disks.length === 0; text: "No disks found."; color: root.warn; font.pixelSize: 12 }
+                                Repeater {
+                                    model: root.disks
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        implicitHeight: 56
+                                        radius: 12
+                                        color: root.repairDisk === modelData.name ? root.bgSelected : root.bgSurface
+                                        border.color: root.repairDisk === modelData.name ? root.accent : root.border
+                                        border.width: root.repairDisk === modelData.name ? 2 : 1
+                                        Text {
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: 16
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: modelData.label
+                                            color: root.textPrimary
+                                            font.pixelSize: 13
+                                            font.family: "monospace"
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.repairDisk = modelData.name
+                                        }
+                                    }
+                                }
+                                Item { Layout.fillHeight: true }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    GhostButton { text: "Quit"; enabled: !root.busy; onClicked: root.quitRepair("quit") }
+                                    Item { Layout.fillWidth: true }
+                                    AccentButton {
+                                        text: "Next"
+                                        enabled: root.repairDisk !== "" && !root.busy
+                                        onClicked: { root.gotoRepair(10); root.startProbe(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 10 Repair: mount and unlock
+                        Item {
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 10
+                                Text { text: "Mount the system"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                Text {
+                                    text: "Target: " + root.repairDisk + (root.repairRoot !== "" ? "  →  " + root.repairRoot : "")
+                                    color: root.textMuted
+                                    font.pixelSize: 12
+                                    font.family: "monospace"
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                                Text { visible: root.repairProbing; text: "Reading partitions..."; color: root.textMuted; font.pixelSize: 12 }
+                                Text {
+                                    visible: !root.repairProbing && root.repairRoot !== ""
+                                    text: root.repairEncrypted ? "✓ Encrypted volume detected (LUKS)" : "No encryption detected"
+                                    color: root.repairEncrypted ? root.ok : root.textSecondary
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                }
+                                FieldLabel { visible: root.repairEncrypted; text: "LUKS PASSPHRASE" }
+                                TextFieldStyled {
+                                    id: repairPassField
+                                    visible: root.repairEncrypted
+                                    echoMode: TextInput.Password
+                                    Layout.fillWidth: true
+                                    enabled: !root.busy
+                                    onTextChanged: root.repairPass = text
+                                }
+                                AccentButton {
+                                    text: root.repairMounting ? "Mounting..." : (root.repairMounted ? "Mounted" : "Unlock & mount")
+                                    enabled: !root.busy && !root.repairMounted && !root.repairProbing && root.repairRoot !== "" && (!root.repairEncrypted || root.repairPass !== "")
+                                    onClicked: root.startMount()
+                                }
+                                Text { visible: root.repairMounted; text: "✓ Mounted on /mnt"; color: root.ok; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                LogView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumHeight: 160
+                                }
+                                Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    GhostButton { text: "Back"; enabled: !root.busy; onClicked: root.gotoRepair(9) }
+                                    Item { Layout.fillWidth: true }
+                                    AccentButton { text: "Next"; enabled: root.repairMounted && !root.busy; onClicked: root.gotoRepair(11) }
+                                }
+                            }
+                        }
+
+                        // 11 Repair: choose repairs
+                        Item {
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 10
+                                Text { text: "What should be repaired?"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                Text { text: "Each option runs inside arch-chroot on the mounted system."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                RepairCard {
+                                    enabled: !root.busy
+                                    title: "a) Reinitialize archlinux-keyring"
+                                    detail: "Reset the pacman keyring and refresh archlinux-keyring. Fixes invalid-signature and corrupted-package errors."
+                                    checked: root.repairKeyring
+                                    onToggled: root.repairKeyring = !root.repairKeyring
+                                }
+                                RepairCard {
+                                    enabled: !root.busy
+                                    title: "b) Reinstall linux kernel"
+                                    detail: "Reinstall the linux package and rebuild the initramfs with mkinitcpio -P."
+                                    checked: root.repairKernel
+                                    onToggled: root.repairKernel = !root.repairKernel
+                                }
+                                RepairCard {
+                                    enabled: !root.busy
+                                    title: "c) Reinstall bootloader"
+                                    detail: "Reinstall Limine to the EFI partition and regenerate limine.conf. Unchecked by default."
+                                    checked: root.repairBootloader
+                                    onToggled: root.repairBootloader = !root.repairBootloader
+                                }
+                                Item { Layout.fillHeight: true }
+                                Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    GhostButton { text: "Back"; enabled: !root.busy; onClicked: root.gotoRepair(10) }
+                                    Item { Layout.fillWidth: true }
+                                    AccentButton {
+                                        text: "Run repairs"
+                                        enabled: !root.busy && (root.repairKeyring || root.repairKernel || root.repairBootloader)
+                                        onClicked: root.startRepairs()
+                                    }
+                                }
+                            }
+                        }
+
+                        // 12 Repair: progress and arch-chroot log
+                        Item {
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 10
+                                Text { text: root.repairRunning ? "Running repairs" : "Repairs finished"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                ProgressBar {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 16
+                                    indeterminate: root.repairRunning
+                                    value: root.repairRunning ? 0 : 1
+                                }
+                                Repeater {
+                                    model: root.repairPlan
+                                    delegate: Text {
+                                        required property var modelData
+                                        readonly property string st: root.repairStates[modelData.id] || "pending"
+                                        text: (st === "done" ? "✓ " : (st === "running" ? "◐ " : (st === "failed" ? "✗ " : "○ "))) + modelData.label
+                                        color: st === "done" ? root.ok : (st === "failed" ? root.warn : (st === "running" ? root.accent : root.textMuted))
+                                        font.pixelSize: 13
+                                    }
+                                }
+                                LogView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumHeight: 160
+                                }
+                                Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    GhostButton { text: "Quit"; enabled: !root.busy; onClicked: root.quitRepair("quit") }
+                                    Item { Layout.fillWidth: true }
+                                    AccentButton {
+                                        text: root.repairUnmounting ? "Unmounting..." : "Unmount & reboot"
+                                        enabled: !root.busy
+                                        onClicked: root.quitRepair("reboot")
+                                    }
                                 }
                             }
                         }
@@ -1090,6 +1718,7 @@ Scope {
                     // bottom step bar
                     Rectangle {
                         Layout.fillWidth: true
+                        visible: root.page >= 2 && root.page <= 8
                         height: 116
                         color: root.bgCard
                         Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
@@ -1149,7 +1778,7 @@ Scope {
                                         anchors.fill: parent
                                         enabled: !root.locked && index <= root.maxAllowedStep
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.step = index
+                                        onClicked: root.gotoStep(index)
                                     }
                                 }
                             }
@@ -1165,6 +1794,7 @@ Scope {
                     // footer
                     Rectangle {
                         Layout.fillWidth: true
+                        visible: root.page <= 7
                         height: 34
                         color: "transparent"
                         Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
@@ -1173,18 +1803,28 @@ Scope {
                             anchors.leftMargin: 20
                             anchors.rightMargin: 20
                             Button {
-                                text: "Back"
-                                enabled: root.step > 0 && !root.locked
-                                onClicked: root.step--
+                                text: root.page <= 1 ? "Quit" : "Back"
+                                visible: root.page !== 8
+                                enabled: root.page <= 1 ? !root.busy : !root.locked
+                                onClicked: {
+                                    if (root.page <= 1) Qt.quit();
+                                    else if (root.page === 2) root.gotoPage(1);
+                                    else root.gotoStep(root.step - 1);
+                                }
                                 background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
                                 contentItem: Text { text: parent.text; color: root.textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
                             Item { Layout.fillWidth: true }
                             Button {
                                 text: "Next"
-                                visible: root.step < 6
-                                enabled: root.step < 6 && !root.locked && root.step < root.maxAllowedStep
-                                onClicked: { if (root.imported && root.step === 0) root.step = 5; else root.step++; }
+                                visible: root.page <= 6
+                                enabled: root.page <= 1 ? true : (!root.locked && root.step < root.maxAllowedStep)
+                                onClicked: {
+                                    if (root.page === 0) root.gotoPage(1);
+                                    else if (root.page === 1) root.proceedFromMode();
+                                    else if (root.imported && root.step === 0) root.gotoStep(5);
+                                    else root.gotoStep(root.step + 1);
+                                }
                                 background: Rectangle { color: root.accent; radius: 12 }
                                 contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }

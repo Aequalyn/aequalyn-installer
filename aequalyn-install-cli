@@ -253,7 +253,7 @@ if [[ -z "$CONFIG" ]]; then
     ui_style "Step 1/6 · Hardware (L1)"
     bash "$SELF_DIR/aequalyn-detect" pretty
 
-    CONFIG=${AEQUALYN_CONFIG:-/root/install.toml}
+    CONFIG=${AEQUALYN_CONFIG:-/home/live/install.toml}
     if ui_confirm "Use the detected proposal as a starting point?"; then
         bash "$SELF_DIR/aequalyn-detect" --toml > "$CONFIG"
     else
