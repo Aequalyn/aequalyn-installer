@@ -13,6 +13,9 @@ approve.
 | `lib/apply.sh` | Partitioning (full wipe, dual boot, manual), LUKS2, Btrfs subvolumes, Limine, snapper |
 | `install.toml.example` | Every option, documented |
 
+The user guide, with the flow, every screen and the repair options, is in
+[docs/GUIDE.md](docs/GUIDE.md).
+
 The interactive UI lives in `shell.qml` / `Installer.qml` and runs under
 Quickshell. `aequalyn-install` launches it; the legacy command-line flags are
 delegated to `aequalyn-install-cli`.
