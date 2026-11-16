@@ -664,6 +664,20 @@ Scope {
             } else {
                 root.statusText = "Apply failed (exit " + code + "). See log.";
             }
+            logCopyProc.running = true;
+        }
+    }
+
+    // The install log is copied to the live home after every apply, success or
+    // failure, and made world-readable so the live user can open it.
+    Process {
+        id: logCopyProc
+        running: false
+        command: ["bash", "-c", "cp -f \"$1\" \"$2\" && chmod 644 \"$2\"", "bash", root.logFile, root.liveHome + "/" + root.logFile.split("/").pop()]
+        stderr: StdioCollector { onStreamFinished: { if (text) root.appendLog(text.trim()); } }
+        onExited: (code) => {
+            const dest = root.liveHome + "/" + root.logFile.split("/").pop();
+            root.statusText += code === 0 ? " Copied to " + dest + "." : " Could not copy the log to " + dest + " (exit " + code + ").";
         }
     }
 
