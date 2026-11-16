@@ -37,7 +37,9 @@ root_device = ""
 
 [boot]
 bootloader       = "limine"
-# Chainload Windows Boot Manager when its EFI partition is found.
+# Chainload Windows Boot Manager only when its ESP is on the target disk and
+# mode = "dualboot". Ignored for fullwipe: erasing a disk must not import
+# another disk's Windows EFI.
 chainload_windows = true
 kernels          = ["linux"]
 

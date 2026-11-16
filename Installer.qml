@@ -54,7 +54,9 @@ Scope {
     property string selectedDisk: ""
     property string mode: "fullwipe"
     property bool encrypt: false
+    property bool chainloadWindows: false
     property int efiSizeMb: 2048
+    onModeChanged: { if (root.mode !== "dualboot") root.chainloadWindows = false; }
 
     property bool profMinimal: true
     property bool profStudent: false
@@ -133,6 +135,11 @@ Scope {
         if (disk.device) root.selectedDisk = disk.device;
         if (disk.mode) root.mode = disk.mode;
         root.encrypt = disk.encrypt === true;
+        const boot = d.boot || {};
+        root.chainloadWindows = boot.chainload_windows === true;
+        // A full wipe installs Aequalyn as the only OS on this disk; another
+        // disk's Windows ESP must never be injected into its menu.
+        if (root.mode !== "dualboot") root.chainloadWindows = false;
         if (typeof disk.efi_size_mb === "number" && disk.efi_size_mb >= 256)
             root.efiSizeMb = disk.efi_size_mb;
         const pkgs = d.packages || {};
@@ -160,13 +167,19 @@ Scope {
         root.step = 5;
     }
 
+    function windowsOnTarget() {
+        if (root.mode !== "dualboot" || !root.chainloadWindows) return false;
+        const w = root.detect && root.detect.win_efi ? String(root.detect.win_efi) : "";
+        return w !== "" && root.selectedDisk !== "" && w.indexOf(root.selectedDisk) === 0;
+    }
+
     function generateToml() {
         const profiles = root.selectedProfiles();
         const profileStr = "[" + profiles.map(p => '"' + p + '"').join(", ") + "]";
         const enc = root.encrypt ? "true" : "false";
         const flat = root.flatpak ? "true" : "false";
         const apps = root.themeApps ? "true" : "false";
-        const chain = root.detect.win_efi ? "true" : "false";
+        const chain = root.windowsOnTarget() ? "true" : "false";
         return "# Aequalyn install.toml -- reviewed by the user, applied by aequalyn-install\n" +
             "version = 1\n\n" +
             "[system]\n" +
@@ -264,17 +277,23 @@ Scope {
             onStreamFinished: {
                 try {
                     root.detect = JSON.parse(text || "{}");
-                    root.mode = root.detect.mode || "fullwipe";
-                    root.encrypt = root.detect.encrypt === true;
-                    root.selectedDisk = root.detect.first_disk || "";
-                    const profs = root.detect.profiles || ["minimal"];
-                    root.profMinimal = profs.indexOf("minimal") >= 0;
-                    root.profStudent = profs.indexOf("student") >= 0;
-                    root.profDev = profs.indexOf("dev") >= 0;
-                    root.profGaming = profs.indexOf("gaming") >= 0;
-                    root.profCreative = profs.indexOf("creative") >= 0;
-                    if (root.detect.browser) root.browser = root.detect.browser;
-                    root.flatpak = root.detect.flatpak === true;
+                    // Detection may finish after the user imported a config;
+                    // never overwrite their reviewed choices in that case.
+                    if (!root.imported) {
+                        root.mode = root.detect.mode || "fullwipe";
+                        root.encrypt = root.detect.encrypt === true;
+                        root.selectedDisk = root.detect.first_disk || "";
+                        root.chainloadWindows = root.mode === "dualboot" &&
+                            root.detect.win_efi !== undefined && root.detect.win_efi !== "";
+                        const profs = root.detect.profiles || ["minimal"];
+                        root.profMinimal = profs.indexOf("minimal") >= 0;
+                        root.profStudent = profs.indexOf("student") >= 0;
+                        root.profDev = profs.indexOf("dev") >= 0;
+                        root.profGaming = profs.indexOf("gaming") >= 0;
+                        root.profCreative = profs.indexOf("creative") >= 0;
+                        if (root.detect.browser) root.browser = root.detect.browser;
+                        root.flatpak = root.detect.flatpak === true;
+                    }
                 } catch (e) {
                     root.statusText = "Detection failed: " + e;
                 }

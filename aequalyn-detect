@@ -41,16 +41,13 @@ battery="no"
 for b in /sys/class/power_supply/BAT*; do [[ -d "$b" ]] && battery="yes" && break; done
 
 # --- Disks ------------------------------------------------------------------
+# Ventoy and other device-mapper live media have no PKNAME; lsblk -s resolves
+# the whole chain (ventoy -> sda1 -> sda).
 boot_source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
 boot_disk=""
 if [[ -n "$boot_source" ]]; then
-    dev="$boot_source"
-    while :; do
-        parent=$(lsblk -dno PKNAME "$dev" 2>/dev/null | tail -1 || true)
-        [[ -n "$parent" ]] || break
-        dev="/dev/$parent"
-    done
-    boot_disk="$dev"
+    boot_name=$(lsblk -srno NAME "$boot_source" 2>/dev/null | tail -1 || true)
+    [[ -n "$boot_name" ]] && boot_disk="/dev/$boot_name"
 fi
 disks=()
 disk_sizes=()
@@ -65,12 +62,32 @@ disk_count=${#disks[@]}
 first_disk=${disks[0]:-}
 first_size=${disk_sizes[0]:-}
 
+# Prefer a completely unused disk as the proposal target: a Windows disk with
+# no free space cannot be dualbooted (apply would abort), while an empty second
+# disk is the obvious place for a fresh install.
+if [[ -n "$first_disk" ]]; then
+    parts_on() { lsblk -nlo NAME "$1" 2>/dev/null | tail -n +2 | grep -c . || true; }
+    if [[ "$(parts_on "$first_disk")" -gt 0 ]]; then
+        for i in "${!disks[@]}"; do
+            if [[ "$(parts_on "${disks[$i]}")" -eq 0 ]]; then
+                first_disk=${disks[$i]}
+                first_size=${disk_sizes[$i]}
+                break
+            fi
+        done
+    fi
+fi
+
 # --- Windows EFI + free space -----------------------------------------------
+# Skip old Aequalyn ESPs even when they contain a copied EFI/Microsoft tree,
+# and require the real Windows boot manager (bootmgfw.efi).
 win_efi=""
 for p in $(blkid -t TYPE=vfat -o device 2>/dev/null || true); do
+    lbl=$(blkid -s LABEL -o value "$p" 2>/dev/null || true)
+    [[ "$lbl" == AEQUALYN* ]] && continue
     mp=$(mktemp -d)
     if mount -o ro "$p" "$mp" 2>/dev/null; then
-        [[ -d "$mp/EFI/Microsoft" ]] && win_efi="$p"
+        [[ -f "$mp/EFI/Microsoft/Boot/bootmgfw.efi" ]] && win_efi="$p"
         umount "$mp" 2>/dev/null || true
     fi
     rmdir "$mp" 2>/dev/null || true
@@ -102,8 +119,13 @@ profiles=(minimal)
 [[ "$battery" == "yes" ]] && profiles+=(student)
 encrypt=false
 [[ "$battery" == "yes" ]] && encrypt=true
+# Only propose dualboot when Windows is on the disk we would install to;
+# installing to a different, empty disk is a full wipe. A Windows install on
+# another disk is never chainloaded into a fullwipe install.
 mode=fullwipe
-[[ -n "$win_efi" ]] && mode=dualboot
+if [[ -n "$win_efi" && -n "$first_disk" && "$win_efi" == "$first_disk"* ]]; then
+    mode=dualboot
+fi
 browser=chromium
 flatpak=false
 
@@ -157,7 +179,7 @@ free_end    = ""
 
 [boot]
 bootloader        = "limine"
-chainload_windows = $([[ -n "$win_efi" ]] && echo true || echo false)
+chainload_windows = $([[ "$mode" == "dualboot" && -n "$win_efi" ]] && echo true || echo false)
 kernels           = ["linux"]
 
 [packages]

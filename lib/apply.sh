@@ -79,17 +79,27 @@ fi
 info "firmware: $FIRMWARE"
 [[ -n "$DISK" && -b "$DISK" ]] || abort "invalid or missing [disk].device: $DISK"
 
-# Never touch the device the ISO booted from.
+# Never touch the device the ISO booted from. Ventoy and other device-mapper
+# live media have no PKNAME, so resolve the whole chain with lsblk -s
+# (ventoy -> sda1 -> sda) instead of walking parents.
+BOOT_DISK=""
 BOOT_SRC=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
 if [[ -n "$BOOT_SRC" ]]; then
-    d="$BOOT_SRC"
-    while :; do
-        parent=$(lsblk -dno PKNAME "$d" 2>/dev/null | tail -1 || true)
-        [[ -n "$parent" ]] || break
-        d="/dev/$parent"
-    done
-    [[ "$DISK" == "$d" ]] && abort "refusing to install onto the live USB ($d)"
+    boot_name=$(lsblk -srno NAME "$BOOT_SRC" 2>/dev/null | tail -1 || true)
+    [[ -n "$boot_name" ]] && BOOT_DISK="/dev/$boot_name"
+    [[ -n "$BOOT_DISK" && "$DISK" == "$BOOT_DISK" ]] && \
+        abort "refusing to install onto the live USB ($BOOT_DISK)"
 fi
+
+# A full wipe makes Aequalyn the only OS on the target disk. Never copy a
+# Windows ESP from another disk into it, even if install.toml still carries
+# chainload_windows = true from an earlier dualboot proposal.
+if [[ "$MODE" == "fullwipe" && "$CHAINLOAD_WINDOWS" == "true" ]]; then
+    CHAINLOAD_WINDOWS=false
+    info "fullwipe selected: Windows chainload disabled (the whole $DISK is erased)"
+fi
+[[ "$MODE" == "fullwipe" || "$MODE" == "dualboot" || "$MODE" == "manual" ]] || \
+    abort "unknown [disk].mode '$MODE' (expected fullwipe, dualboot or manual)"
 
 # ---------------------------------------------------------- package source ---
 OFFLINE_REPO="/var/cache/offline-repo"
@@ -140,15 +150,19 @@ PKGS=()
 PKGS+=($(read_list "$AEQUALYN_ROOT/packages/base.packages"))
 PKGS+=($(read_list "$AEQUALYN_ROOT/packages/desktop.packages"))
 
-# Hardware conditionals (L1 detection, no AI)
-# aequalyn-detect --shell emits shell-safe `KEY=%q` lines (see its header),
-# so source them instead of parsing with sed/tr, which would leave the
-# backslash-escapes from %q attached to multi-word values such as
-# "nvidia-open nvidia-utils" (bug: "target not found: nvidia-open\\").
+# Hardware conditionals (L1 detection, no AI).
+# aequalyn-detect --shell also emits MODE/ENCRYPT/PROFILES/BROWSER/FLATPAK
+# proposals. Sourcing the whole file silently overwrote the user's approved
+# install.toml (a fullwipe became a dualboot). Read only the three keys this
+# script actually needs; everything else comes from the config.
+UCODE=""; GPU_PKGS=""; BATTERY="no"
 DET_ENV=$(mktemp)
 bash "$AEQUALYN_ROOT/installer/aequalyn-detect" --shell > "$DET_ENV"
-# shellcheck disable=SC1090
-. "$DET_ENV"
+while IFS= read -r det_line; do
+    case "$det_line" in
+        UCODE=*|GPU_PKGS=*|BATTERY=*) eval "$det_line" ;;
+    esac
+done < "$DET_ENV"
 rm -f "$DET_ENV"
 [[ -n "$UCODE" ]] && PKGS+=($UCODE)
 [[ -n "$GPU_PKGS" ]] && PKGS+=($GPU_PKGS)
@@ -208,21 +222,30 @@ if [[ "$SNAPSHOT_BEFORE" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------- partitioning -----
-part_num() { # part_num <device> <n> -> nvme/mmcblk need a 'p'
+part_num() { # part_num <device> <n> -> nvme/mmcblk/loop need a 'p'
     local dev=$1 n=$2
-    [[ "$dev" == *nvme* || "$dev" == *mmcblk* ]] && printf '%sp%s' "$dev" "$n" || printf '%s%s' "$dev" "$n"
+    [[ "$dev" == *nvme* || "$dev" == *mmcblk* || "$dev" == *loop* ]] \
+        && printf '%sp%s' "$dev" "$n" || printf '%s%s' "$dev" "$n"
 }
 
+# Windows can only be chainloaded from the disk we install to: a Microsoft
+# folder on another disk is not a dual boot. Skip old Aequalyn ESPs even when
+# they contain a copied EFI/Microsoft tree, and require the real boot manager.
 WIN_EFI=""
-for p in $(blkid -t TYPE=vfat -o device 2>/dev/null || true); do
-    mp=$(mktemp -d)
-    if mount -o ro "$p" "$mp" 2>/dev/null; then
-        [[ -d "$mp/EFI/Microsoft" ]] && WIN_EFI="$p"
-        umount "$mp" 2>/dev/null || true
-    fi
-    rmdir "$mp" 2>/dev/null || true
-    [[ -n "$WIN_EFI" ]] && break
-done
+if [[ "$CHAINLOAD_WINDOWS" == "true" && "$MODE" != "fullwipe" ]]; then
+    for p in $(blkid -t TYPE=vfat -o device 2>/dev/null || true); do
+        lbl=$(blkid -s LABEL -o value "$p" 2>/dev/null || true)
+        [[ "$lbl" == AEQUALYN* ]] && continue
+        [[ "$p" == "$DISK"* ]] || continue
+        mp=$(mktemp -d)
+        if mount -o ro "$p" "$mp" 2>/dev/null; then
+            [[ -f "$mp/EFI/Microsoft/Boot/bootmgfw.efi" ]] && WIN_EFI="$p"
+            umount "$mp" 2>/dev/null || true
+        fi
+        rmdir "$mp" 2>/dev/null || true
+        [[ -n "$WIN_EFI" ]] && break
+    done
+fi
 
 ALIGN=$((1048576))
 if [[ "$MODE" == "manual" ]]; then
@@ -239,6 +262,9 @@ elif [[ "$MODE" == "fullwipe" ]]; then
     for part in $(lsblk -lnpo NAME "$DISK" | tail -n +2); do
         swapoff "$part" 2>/dev/null || true
         umount -R "$part" 2>/dev/null || true
+        # Remove partition payload signatures (LUKS, btrfs, vfat, swap) too:
+        # wiping only the disk-level header can leave stale LUKS/btrfs ids.
+        wipefs -a "$part" >/dev/null 2>&1 || true
     done
     wipefs -a "$DISK" >/dev/null 2>&1 || true
     partprobe "$DISK" 2>/dev/null || true; udevadm settle
@@ -250,7 +276,7 @@ elif [[ "$MODE" == "fullwipe" ]]; then
     parted --script "$DISK" name 2 "AEQUALYN_ROOT"
     EFI_NUM=1; ROOT_NUM=2
     EFI_DEV=$(part_num "$DISK" 1); ROOT_DEV=$(part_num "$DISK" 2)
-else # dualboot
+elif [[ "$MODE" == "dualboot" ]]; then
     FREE=$(parted -m "$DISK" unit B print free 2>/dev/null | \
         awk -F: '$NF ~ /free/ {gsub(/B/,"",$2);gsub(/B/,"",$3);gsub(/B/,"",$4); if($4+0>m+0){m=$4+0;s=$2;e=$3}} END{if(m>0) printf "%s %s %s",s,e,m}' || true)
     START_B=$(awk '{print $1}' <<<"$FREE")
@@ -258,7 +284,11 @@ else # dualboot
     SIZE_B=$(awk '{print $3}' <<<"$FREE")
     [[ -n "$FREE" && "$SIZE_B" -ge $((12*1073741824)) ]] || \
         abort "no free region >= 12 GiB on $DISK (shrink a partition first)"
-    LAST=$(lsblk -n -o PARTN "$DISK" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
+    # grep exits 1 when the disk has no partitions yet, which under
+    # set -euo pipefail used to abort before ${LAST:-0} could run.
+    LAST=$(lsblk -n -o PARTN "$DISK" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
+    [[ -n "$LAST" ]] || \
+        abort "dualboot needs an existing partition table on $DISK (use mode=\"fullwipe\" for an empty disk)"
     EFI_NUM=$(( ${LAST:-0} + 1 )); ROOT_NUM=$(( EFI_NUM + 1 ))
     EFI_START=$(( (START_B + ALIGN - 1) / ALIGN * ALIGN ))
     EFI_END=$(( EFI_START + EFI_MB*1048576 ))
@@ -272,6 +302,8 @@ else # dualboot
     parted --script "$DISK" name "$ROOT_NUM" "AEQUALYN_ROOT"
     EFI_DEV=$(part_num "$DISK" "$EFI_NUM"); ROOT_DEV=$(part_num "$DISK" "$ROOT_NUM")
     ok "dualboot: $(( SIZE_B/1073741824 )) GiB free region reused"
+else
+    abort "unknown [disk].mode '$MODE' (expected fullwipe, dualboot or manual)"
 fi
 
 partprobe "$DISK" 2>/dev/null || true; sync; sleep 2
@@ -317,8 +349,10 @@ if [[ "$SIMULATE" == "true" ]]; then
     exit 0
 fi
 
-# Chainload Windows bootloader into our ESP
-if [[ "$MODE" == "dualboot" && -n "$WIN_EFI" && "$WIN_EFI" != "$EFI_DEV" ]]; then
+# Chainload Windows bootloader into our ESP (dualboot only). A fullwipe is a
+# single-OS disk and must never inherit another disk's Microsoft EFI tree.
+if [[ "$MODE" == "dualboot" && "$CHAINLOAD_WINDOWS" == "true" \
+      && -n "$WIN_EFI" && "$WIN_EFI" != "$EFI_DEV" ]]; then
     WIN_MP=$(mktemp -d)
     if mount -o ro "$WIN_EFI" "$WIN_MP" 2>/dev/null; then
         mkdir -p /mnt/boot/EFI
