@@ -73,6 +73,12 @@ Scope {
 
     property string themeMode: "wallpaper"
     property bool themeApps: true
+    // Top bar layout (widget ids per region, left -> right). These are the
+    // reference positions shipped on the ISO; leaving them editable in
+    // install.toml lets a reinstall restore a customised bar exactly.
+    property var barLeft: ["appsmenu", "workspaces", "layouts", "network", "atelier"]
+    property var barCenter: ["clock", "media", "title", "battery", "volume"]
+    property var barRight: ["brightness", "cpu", "bluetooth", "temperature", "caffeine", "tray", "screenrecorder", "screenshot", "power", "settingsbutton", "plume", "altscape"]
 
     property bool dryRun: false
     property bool writing: false
@@ -176,6 +182,7 @@ Scope {
     function generateToml() {
         const profiles = root.selectedProfiles();
         const profileStr = "[" + profiles.map(p => '"' + p + '"').join(", ") + "]";
+        const arrStr = a => "[" + (a || []).map(x => '"' + x + '"').join(", ") + "]";
         const enc = root.encrypt ? "true" : "false";
         const flat = root.flatpak ? "true" : "false";
         const apps = root.themeApps ? "true" : "false";
@@ -219,6 +226,9 @@ Scope {
             "theme_apps = " + apps + "\n" +
             "bar_height = 32\n" +
             "bar_opacity = 100\n" +
+            "bar_left = " + arrStr(root.barLeft) + "\n" +
+            "bar_center = " + arrStr(root.barCenter) + "\n" +
+            "bar_right = " + arrStr(root.barRight) + "\n" +
             'profile = "default"\n';
     }
 

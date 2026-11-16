@@ -68,6 +68,13 @@ THEME_MODE=${AEQUALYN_THEME_MODE:-wallpaper}
 THEME_APPS=${AEQUALYN_THEME_APPS:-true}
 BAR_HEIGHT=${AEQUALYN_BAR_HEIGHT:-32}
 BAR_OPACITY=${AEQUALYN_BAR_OPACITY:-100}
+# Top bar widget layout (space-separated ids per region). The TOML parser above
+# emits [aequalyn].bar_left/center/right as space-separated strings; the defaults
+# match the reference layout shipped in config/aequalyn/settings.json so older
+# install.toml files without these keys still install the intended positions.
+BAR_LEFT=${AEQUALYN_BAR_LEFT:-"appsmenu workspaces layouts network atelier"}
+BAR_CENTER=${AEQUALYN_BAR_CENTER:-"clock media title battery volume"}
+BAR_RIGHT=${AEQUALYN_BAR_RIGHT:-"brightness cpu bluetooth temperature caffeine tray screenrecorder screenshot power settingsbutton plume altscape"}
 
 [[ $EUID -eq 0 ]] || abort "must run as root"
 # UEFI is the main target; legacy BIOS (VMs that default to it, such as GNOME
@@ -797,16 +804,21 @@ fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
 # settings.json from [aequalyn] section
-python3 - "/mnt/home/$USERNAME/.config/aequalyn/settings.json" "$THEME_MODE" "$THEME_APPS" "$BAR_HEIGHT" "$BAR_OPACITY" <<'PY'
+python3 - "/mnt/home/$USERNAME/.config/aequalyn/settings.json" \
+    "$THEME_MODE" "$THEME_APPS" "$BAR_HEIGHT" "$BAR_OPACITY" \
+    "$BAR_LEFT" "$BAR_CENTER" "$BAR_RIGHT" <<'PY'
 import json, sys
 p = sys.argv[1]
 try: d = json.load(open(p))
 except Exception: d = {"version":1,"appearance":{},"hyprland":{}}
 d.setdefault("appearance", {})
+left, center, right = (sys.argv[6].split(), sys.argv[7].split(), sys.argv[8].split())
 d["appearance"].update(themeMode=sys.argv[2],
                        themeApps=(sys.argv[3]=="true"),
                        barHeight=int(sys.argv[4]),
-                       barOpacity=int(sys.argv[5]))
+                       barOpacity=int(sys.argv[5]),
+                       barLeft=left, barCenter=center, barRight=right,
+                       pluginOrder=left + center + right)
 open(p,"w").write(json.dumps(d, indent=2) + "\n")
 PY
 # SDDM: autologin the installed user into the Aequalyn Wayland session. The
