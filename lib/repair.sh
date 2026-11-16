@@ -25,7 +25,7 @@ partitions() {
     while read -r name type size fstype; do
         [[ "$type" == part ]] || continue
         printf '%s %s %s\n' "$name" "$size" "${fstype:-}"
-    done < <(lsblk -npbrl -o NAME,TYPE,SIZE,FSTYPE "$disk")
+    done < <(lsblk -npbl -o NAME,TYPE,SIZE,FSTYPE "$disk")
 }
 
 # Print ENCRYPTED, ROOT and ESP for DISK. ENCRYPTED=1 when a LUKS partition
