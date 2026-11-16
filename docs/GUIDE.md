@@ -103,7 +103,7 @@ The footer has **Back** on the left and **Next** on the right. Back from the fir
 | 3 | **Disk** | Target disk, install mode, LUKS2 encryption, EFI partition size. The **What will happen** panel lists the current partitions and every change the install will make. | Modes: `fullwipe` (erase the disk), `dualboot` (use the largest free region and keep Windows), `manual`. The live USB disk is never listed. `dualboot` needs 12 GiB of unallocated space: without it the panel says so and Next stays disabled. |
 | 4 | **Packages** | Profiles (minimal, student, dev, gaming, creative), browser, web apps, Flatpak, lock screens, package source, terminal editor. | At least one profile is required. |
 | 5 | **Aequalyn** | Colour mode and whether GTK apps follow the theme. Dry run option. | Dry run writes `install.toml` and stops before partitioning. |
-| 6 | **Review** | The generated `install.toml`, read-only, and the **Install** button. | The Install button is the only way to start an install. |
+| 6 | **Review** | The generated `install.toml`, read-only, a confirmation box, and the **Install** button. | Type the target disk's name (for example `nvme0n1`) to enable Install. The box says what the mode does to the disk, and warns when Windows is on it. Install stays disabled until the name matches. |
 | 7 | **Finish** | Apply progress bar, a live log, **Reboot now** and **Quit**. | **Quit** is greyed out while the install runs. |
 
 Example of the **Disk** page:
