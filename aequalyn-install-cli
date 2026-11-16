@@ -320,7 +320,12 @@ d.setdefault("boot", {}).update(chainload_windows=(chain=="true"))
 d.setdefault("packages", {}).update(profiles=profiles.split(), browser=browser,
                                     flatpak=(flatpak=="true"), source=src,
                                     editor=editor)
-d.setdefault("aequalyn", {}).update(theme_mode=theme, theme_apps=(apps=="true"))
+d.setdefault("aequalyn", {}).update(
+    theme_mode=theme, theme_apps=(apps=="true"),
+    bar_left=["appsmenu", "workspaces", "layouts", "network", "atelier"],
+    bar_center=["clock", "media", "title", "battery", "volume"],
+    bar_right=["brightness", "cpu", "bluetooth", "temperature", "caffeine", "tray", "screenrecorder", "screenshot", "power", "settingsbutton", "plume", "altscape"],
+)
 def dump(o, indent=""):
     lines=[]
     for k,v in o.items():
