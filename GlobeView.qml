@@ -576,8 +576,13 @@ Item {
     }
 
     // interaction
+    // A plain wheel belongs to the wizard page the globe lives in: unhandled
+    // wheel events propagate to the ScrollView behind it, so the whole
+    // Identity page scrolls even with the cursor over the globe. Hold Ctrl to
+    // zoom the globe instead (the +/- buttons zoom too).
     WheelHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedModifiers: Qt.ControlModifier
         onWheel: function(e) { root.zoomBy(Math.pow(1.0025, e.angleDelta.y)); e.accepted = true }
     }
 

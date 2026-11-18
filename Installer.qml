@@ -86,8 +86,17 @@ Scope {
     property bool locked: false
     property var timezones: []
     property var filteredTimezones: []
-    onStepChanged: { if (root.step > root.maxAllowedStep) root.step = root.maxAllowedStep; }
-    onMaxAllowedStepChanged: { if (root.step > root.maxAllowedStep) root.step = root.maxAllowedStep; }
+    // A finished or failed install legitimately parks the wizard on the
+    // Finish page even though the step bar is unlocked again for a retry;
+    // the clamp must never yank the user off it.
+    onStepChanged: {
+        if (root.step === 6 && (root.installFinished || root.installFailed)) return;
+        if (root.step > root.maxAllowedStep) root.step = root.maxAllowedStep;
+    }
+    onMaxAllowedStepChanged: {
+        if (root.step === 6 && (root.installFinished || root.installFailed)) return;
+        if (root.step > root.maxAllowedStep) root.step = root.maxAllowedStep;
+    }
     property string geomPath: Quickshell.env("HOME") + "/.config/aequalyn/installer-geometry.conf"
     property bool imported: false
     readonly property bool step0Valid: true
@@ -101,9 +110,34 @@ Scope {
         (!root.step2Valid ? 2 :
         (!root.step3Valid ? 3 :
         (!root.step4Valid ? 4 : 5))))))
+
+    // One line in the footer saying what is still missing on the current page,
+    // so a disabled Next never reads as a dead button.
+    readonly property string stepHint: {
+        if (root.locked || root.step < 1 || root.step > 4) return "";
+        if (root.step === 1 && !root.step1Valid)
+            return "Hostname, username, timezone and a matching password are required to continue.";
+        if (root.step === 2 && !root.step2Valid)
+            return "Select a target disk to continue.";
+        if (root.step === 3 && !root.step3Valid)
+            return "Pick at least one package profile to continue.";
+        return "";
+    }
     property string statusText: ""
     property bool installFinished: false
     property bool rebooting: false
+
+    // ---- install flow state -------------------------------------------------
+    // Once Install is pressed the wizard is committed: no Close installer any
+    // more, and the Finish page switches between running / succeeded / failed.
+    property bool installStarted: false       // Install was pressed at least once
+    property bool installFailed: false         // apply exited non-zero
+    property bool finishAcknowledged: false    // Finish clicked -> Reboot Now / Debug / Retry
+    property bool showSplash: false            // "Enjoy Your Distro!" right before the reboot
+    property bool online: false                // connectivity probe result
+    property bool netChecking: true            // probe in flight
+    // The help invite shown on failure, next to its QR code (assets/discord-qr.png).
+    readonly property string discordInvite: "https://discord.gg/VwfceB5JbZ"
 
     // Log is kept as a ListModel instead of one growing string: appending to a
     // huge TextArea forces a full re-layout per line, which is what made the UI
@@ -271,7 +305,10 @@ Scope {
         }
         root.locked = true;
         root.clearLog();
+        root.installStarted = true;
         root.installFinished = false;
+        root.installFailed = false;
+        root.finishAcknowledged = false;
         root.statusText = "Writing configuration...";
         root.writing = true;
         root.step = 6;
@@ -363,6 +400,24 @@ Scope {
         }
     }
 
+    // Connectivity probe, the same check lib/apply.sh uses before picking the
+    // package source. Without internet the proposal defaults to the bundled
+    // offline repository, and a failed install shows the apology page instead
+    // of the AI debug session (which needs the network anyway).
+    Process {
+        id: netProc
+        running: false
+        command: ["ping", "-c", "1", "-W", "2", "archlinux.org"]
+        onExited: (code) => {
+            root.netChecking = false;
+            root.online = code === 0;
+            // Only shape the *proposal*: never fight an imported config, a
+            // manual choice or an install that already ran.
+            if (!root.online && !root.imported && !root.installStarted && root.source === "auto")
+                root.source = "offline";
+        }
+    }
+
     Process {
         id: importProc
         running: false
@@ -416,10 +471,16 @@ Scope {
             root.writing = false;
             if (code !== 0) {
                 root.statusText = "Failed to write config (exit " + code + ").";
+                // Recoverable: let the user go back and try again.
+                root.locked = false;
                 return;
             }
             if (root.dryRun) {
+                // A dry run is a review aid, not an install: unlock, land back
+                // on the Review page and let the real Install be one click away.
                 root.statusText = "Dry run complete. Config written to " + root.configPath;
+                root.locked = false;
+                root.step = 5;
                 return;
             }
             root.statusText = "Applying configuration...";
@@ -442,7 +503,14 @@ Scope {
                 root.installFinished = true;
                 root.statusText = "Installation complete. Log: " + root.logFile;
             } else {
-                root.statusText = "Apply failed (exit " + code + "). See log.";
+                root.installFailed = true;
+                // A failed install is recoverable: unlock the wizard so Back,
+                // the step bar and a retry all work, and re-probe the network
+                // to pick between the AI debug session and the offline page.
+                root.locked = false;
+                root.statusText = "Apply failed (exit " + code + "). See log: " + root.logFile;
+                root.netChecking = true;
+                netProc.running = true;
             }
         }
     }
@@ -453,6 +521,9 @@ Scope {
         command: root.isRoot ? ["systemctl", "reboot"] : ["pkexec", "systemctl", "reboot"]
         onExited: (code) => {
             root.rebooting = false;
+            // if systemctl could not reboot, lift the splash again so the
+            // error is visible in the installer window
+            root.showSplash = false;
             root.statusText = "Reboot failed (exit " + code + "). Reboot manually.";
         }
     }
@@ -463,6 +534,65 @@ Scope {
         tzListProc.running = true;
         tzProc.running = true;
         lsblkProc.running = true;
+        netProc.running = true;
+    }
+
+    // ---- AI debug session (failure path, online only) -----------------------
+    // The Debug button writes this skill where opencode discovers it, then
+    // opens foot running `opencode --auto` with a prompt that loads the skill.
+    // Everything the agent needs -- the ISO and session details, the script,
+    // config and log locations, and the job itself -- is in the body, filled
+    // in from the real paths at click time.
+    function debugSkillMd() {
+        return "---\n" +
+            "name: Aequalyn Install Debug\n" +
+            "description: Fix a failed Aequalyn installation from the live ISO -- read the install log, repair and finish the install, or explain how to restart it.\n" +
+            "---\n\n" +
+            "# Aequalyn install debug\n\n" +
+            "You are running as root inside the Aequalyn live ISO, in a foot terminal, after the guided installer reported a FAILED installation. The person watching this terminal just clicked Debug in the installer UI.\n\n" +
+            "## The environment\n\n" +
+            "- Live ISO: Aequalyn -- an Arch Linux base with the Aequalyn desktop (a Quickshell shell on Hyprland/Wayland) on top.\n" +
+            "- You run as root. The live desktop user is `live` (password `live`, passwordless sudo).\n" +
+            "- The distribution being installed: Arch Linux with Btrfs subvolumes + snapper, the Limine boot loader, LUKS2 when encryption was enabled, and the Aequalyn desktop -- configured end to end by install.toml.\n\n" +
+            "## Where everything is\n\n" +
+            "- Config under review: `" + root.configPath + "`\n" +
+            "- Install log -- read this first: `" + root.logFile + "`\n" +
+            "- Apply script that does the real work: `" + root.applyScript + "`\n" +
+            "- Installer scripts: `" + root.installerDir + "` (aequalyn-detect, aequalyn-install-cli, aequalyn-repair, lib/apply.sh)\n" +
+            "- Aequalyn source tree on the ISO: /opt/aequalyn\n" +
+            "- Bundled offline package repo (works with no internet): /var/cache/offline-repo\n\n" +
+            "## Your job\n\n" +
+            "1. Read the end of the log first: `tail -n 150 " + root.logFile + "`.\n" +
+            "2. Name the failing step in one line (partitioning, LUKS, pacstrap/pacman, boot loader, Aequalyn branding) and what went wrong.\n" +
+            "3. Then try to FIX the installation and get it to the last step yourself. Prefer fixing forward: repair the failed step and continue from where it died. Re-running the whole apply (`ASSUME_YES=1 AEQUALYN_TEE_LOG=1 bash " + root.applyScript + " " + root.configPath + " <password> " + root.logFile + "`) is allowed only with the user's OK -- it re-partitions the disk named in install.toml, and it needs the account password, so ASK the user for it and never guess. Before anything destructive, confirm the disk in install.toml is really the one they want installed.\n" +
+            "4. If fixing forward is not possible, provide clear instructions to restart the installation: go back to the installer (Retry install, or `aequalyn-install` from the dock), adjust whatever the log says went wrong, and click Install. The reviewed config is kept at `" + root.configPath + "` and can be re-imported (Load in the wizard, or `aequalyn-install --config " + root.configPath + "` in a terminal).\n" +
+            "5. When you are done, tell the user exactly what state the system is in and what to do next: reboot into the new system, or restart the install.\n\n" +
+            "For human help, the user can join " + root.discordInvite + " -- the installer shows a QR code for it next to the Debug button.\n";
+    }
+
+    function startDebug() {
+        root.statusText = "Preparing the AI debug session...";
+        debugSkillProc.running = true;
+    }
+
+    Process {
+        id: debugSkillProc
+        running: false
+        stdinEnabled: true
+        // Global opencode skills dir: discovered regardless of the project cwd.
+        property string skillPath: Quickshell.env("HOME") + "/.config/opencode/skills/aequalyn-debug/SKILL.md"
+        command: ["bash", "-c", "mkdir -p \"$(dirname " + JSON.stringify(skillPath) + ")\" && tee " + JSON.stringify(skillPath)]
+        onStarted: { write(root.debugSkillMd()); stdinEnabled = false; }
+        onExited: (code) => {
+            if (code !== 0) {
+                root.statusText = "Could not write the debug skill (exit " + code + ").";
+                return;
+            }
+            root.statusText = "AI debug session opening in foot...";
+            Quickshell.execDetached(["foot", "sh", "-lc",
+                "cd " + JSON.stringify(Quickshell.env("HOME")) + " && opencode --auto --prompt " +
+                JSON.stringify("The Aequalyn installation on this machine just failed. Load the @aequalyn-debug skill and follow it: read the install log, diagnose the failure, fix the installation and get it to the last step yourself. If you cannot fix it, explain exactly what went wrong and give me clear instructions to restart the installer and finish the install. For human help there is " + root.discordInvite + ".")]);
+        }
     }
 
     // ---- UI helpers ---------------------------------------------------------
@@ -539,6 +669,42 @@ Scope {
             font.pixelSize: 16
             verticalAlignment: Text.AlignVCenter
             leftPadding: 12
+        }
+    }
+
+    // Every action in the wizard: 52 px tall, 16 pt demi-bold, with its own
+    // hover and press states. `primary` picks the accent-filled variant used
+    // for the one main action of a screen; everything else is bordered.
+    component BigButton: Button {
+        id: btn
+        property bool primary: false
+        hoverEnabled: true
+        implicitHeight: 52
+        leftPadding: 24
+        rightPadding: 24
+        topPadding: 0
+        bottomPadding: 0
+        scale: pressed ? 0.97 : 1
+        Behavior on scale { NumberAnimation { duration: 80; easing.type: Easing.OutQuad } }
+        background: Rectangle {
+            radius: 14
+            color: !btn.enabled ? root.bgHover
+                 : btn.primary ? (btn.pressed ? Qt.darker(root.accent, 1.15)
+                    : btn.hovered ? Qt.lighter(root.accent, 1.08) : root.accent)
+                 : btn.pressed ? root.bgSelected
+                 : btn.hovered ? root.bgHover : root.bgSurface
+            border.width: btn.primary ? 0 : 1
+            border.color: btn.primary ? "transparent"
+                 : (btn.hovered && btn.enabled) ? root.accent : root.border
+            Behavior on color { ColorAnimation { duration: 120 } }
+        }
+        contentItem: Text {
+            text: btn.text
+            color: !btn.enabled ? root.textMuted : btn.primary ? root.bgBase : root.textPrimary
+            font.pixelSize: 16
+            font.weight: Font.DemiBold
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
         }
     }
 
@@ -689,7 +855,7 @@ Scope {
                         // 0 Welcome
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -741,6 +907,9 @@ Scope {
                                                 ["Laptop battery", (root.detect.battery || "—")],
                                                 ["Disks", (root.detect.disk_count || 0) + "  (first: " + (root.detect.first_disk || "none") + ")"],
                                                 ["Windows EFI", (root.detect.win_efi || "not found")],
+                                                ["Internet", root.netChecking ? "checking..."
+                                                     : (root.online ? "connected — online installs available"
+                                                        : "not connected — offline install proposed")],
                                                 ["Proposed profiles", (root.detect.profiles || []).join(", ")],
                                                 ["Proposed mode", (root.detect.mode || "—") + "   encrypt: " + (root.detect.encrypt === true)]
                                             ]
@@ -757,11 +926,25 @@ Scope {
                                         }
                                     }
 
-                                    Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12 }
-                                    Button {
+                                    Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                    BigButton {
                                         text: "Re-detect"
                                         enabled: !root.locked
-                                        onClicked: { root.detecting = true; detectProc.running = true; lsblkProc.running = true; }
+                                        onClicked: {
+                                            root.detecting = true;
+                                            detectProc.running = true;
+                                            lsblkProc.running = true;
+                                            root.netChecking = true;
+                                            netProc.running = true;
+                                        }
+                                    }
+                                    Text {
+                                        text: "No internet connection detected: the bundled offline repository is proposed, and Online as a package source would not be able to download anything."
+                                        color: root.warn
+                                        visible: !root.netChecking && !root.online
+                                        font.pixelSize: 12
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
@@ -771,7 +954,7 @@ Scope {
                                             Layout.fillWidth: true
                                             placeholderText: "/path/to/install.toml"
                                         }
-                                        Button {
+                                        BigButton {
                                             text: "Load"
                                             enabled: !root.locked
                                             onClicked: {
@@ -779,15 +962,12 @@ Scope {
                                                 importProc.path = importPathField.text.trim();
                                                 importProc.running = true;
                                             }
-                                            background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                            contentItem: Text { text: parent.text; color: root.textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                         }
-                                        Button {
+                                        BigButton {
                                             text: "Browse"
+                                            primary: true
                                             enabled: !root.locked
                                             onClicked: zenityProc.running = true
-                                            background: Rectangle { color: root.accent; radius: 12 }
-                                            contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                         }
                                     }
                                     Text { text: root.imported ? "Imported config loaded. Review and apply." : ""; color: root.ok; font.pixelSize: 12 }
@@ -798,7 +978,7 @@ Scope {
                         // 1 Identity
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -822,14 +1002,13 @@ Scope {
                                         Layout.preferredHeight: 320
                                         onTimezoneSelected: (tz) => root.timezone = tz
                                     }
+                                    Text { text: "Drag to rotate · Ctrl + scroll to zoom · click a station to pick its timezone. Scrolling the page works everywhere, over the globe too."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                     Text { text: "Selected: " + root.timezone; color: root.textPrimary; font.pixelSize: 12 }
                                     Text { text: "Region/City, e.g. Europe/Bucharest."; color: root.textMuted; font.pixelSize: 11 }
-                                    Button {
+                                    BigButton {
                                         text: "Use system timezone (timedatectl)"
                                         enabled: !root.locked
                                         onClicked: tzProc.running = true
-                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                        contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                     }
                                     FieldLabel { text: "CONSOLE KEYMAP" }
                                     TextFieldStyled { text: root.keymap; Layout.fillWidth: true; onTextChanged: root.keymap = text }
@@ -852,7 +1031,7 @@ Scope {
                         // 2 Disk
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -908,7 +1087,7 @@ Scope {
                         // 3 Packages
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -949,6 +1128,14 @@ Scope {
                                         currentIndex: Math.max(0, ["Auto","Offline","Online"].map(x=>x.toLowerCase()).indexOf(root.source))
                                         onActivated: root.source = currentText.toLowerCase()
                                     }
+                                    Text {
+                                        text: "No internet connection detected: the bundled offline repository is proposed, and an Online source would fail to download packages."
+                                        color: root.warn
+                                        visible: !root.netChecking && !root.online
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
                                     FieldLabel { text: "TERMINAL EDITOR" }
                                     Text { text: "Default editor for the terminal."; color: root.textMuted; font.pixelSize: 11 }
                                     ComboBoxStyled {
@@ -964,7 +1151,7 @@ Scope {
                         // 4 Aequalyn
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -991,7 +1178,7 @@ Scope {
                         // 5 Review
                         Item {
                             ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 anchors.fill: parent
                                 anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
@@ -1026,28 +1213,50 @@ Scope {
                                         Text { text: "Imported configs do not store passwords. Enter one before applying."; color: root.textMuted; font.pixelSize: 11 }
                                     }
 
-                                    Button {
+                                    BigButton {
+                                        primary: true
+                                        Layout.preferredWidth: 260
+                                        Layout.alignment: Qt.AlignHCenter
                                         enabled: !(root.writing || root.applying) && !root.locked
                                         text: root.writing ? "Writing..." : (root.applying ? "Applying..." : (root.dryRun ? "Write config (dry run)" : "Install"))
                                         onClicked: root.startApply()
-                                        background: Rectangle {
-                                            color: parent.enabled ? root.accent : root.bgHover
-                                            radius: 12
-                                        }
-                                        contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                     }
                                 }
                             }
                         }
 
-                        // 6 Finish
+                        // 6 Finish: progress while installing, then a staged
+                        // end -- Finish acknowledges the outcome, and Reboot
+                        // Now (success) or Debug / Retry (failure) follow it.
+                        // The Close installer button is gone for good once
+                        // Install has been pressed: quitting mid-install would
+                        // kill the apply, and after it there is nothing left to
+                        // decide but reboot, retry or debug.
                         Item {
                             ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                spacing: 8
-                                Text { text: "Finish"; color: root.textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold }
-                                Text { text: root.statusText; color: root.warn; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                spacing: 10
+
+                                Text {
+                                    text: (root.writing || root.applying) ? "Installing Aequalyn..."
+                                         : root.installFinished ? "Installation complete"
+                                         : root.installFailed ? "Installation failed"
+                                         : "Finish"
+                                    color: root.installFailed ? root.warn : (root.installFinished ? root.ok : root.textPrimary)
+                                    font.pixelSize: 20
+                                    font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    text: root.statusText
+                                    color: (root.writing || root.applying) ? root.textSecondary
+                                         : root.installFinished ? root.ok
+                                         : root.installFailed ? root.warn : root.textSecondary
+                                    visible: root.statusText !== ""
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WrapAnywhere
+                                    Layout.fillWidth: true
+                                }
                                 ProgressBar {
                                     Layout.fillWidth: true
                                     implicitHeight: 16
@@ -1057,29 +1266,138 @@ Scope {
                                 LogView {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    Layout.minimumHeight: 200
+                                    Layout.minimumHeight: 160
                                 }
+
+                                // Offline failure: no AI debug session without
+                                // the network, so say sorry and point at the log.
+                                Rectangle {
+                                    visible: root.installFailed && !root.online
+                                    Layout.fillWidth: true
+                                    implicitHeight: apologyCol.implicitHeight + 20
+                                    radius: 12
+                                    color: root.bgSurface
+                                    border.color: root.warn
+                                    border.width: 1
+                                    ColumnLayout {
+                                        id: apologyCol
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 4
+                                        Text {
+                                            text: "Your installation failed, please review the log at the path below and retry. We are sorry for this inconvenience."
+                                            color: root.textPrimary
+                                            font.pixelSize: 14
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Text {
+                                            text: root.logFile
+                                            color: root.accent
+                                            font.family: "monospace"
+                                            font.pixelSize: 12
+                                            wrapMode: Text.WrapAnywhere
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                }
+
+                                // Any failure: human help, one scan away.
+                                Rectangle {
+                                    visible: root.installFailed
+                                    Layout.fillWidth: true
+                                    implicitHeight: discordRow.implicitHeight + 20
+                                    radius: 12
+                                    color: root.bgSurface
+                                    border.color: root.border
+                                    border.width: 1
+                                    RowLayout {
+                                        id: discordRow
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 14
+                                        // white card: a QR scans best dark on light
+                                        Rectangle {
+                                            Layout.preferredWidth: 140
+                                            Layout.preferredHeight: 140
+                                            radius: 10
+                                            color: "#ffffff"
+                                            Image {
+                                                anchors.centerIn: parent
+                                                source: Qt.resolvedUrl("assets/discord-qr.png")
+                                                asynchronous: true
+                                                width: 124
+                                                height: 124
+                                                fillMode: Image.PreserveAspectFit
+                                                smooth: true
+                                            }
+                                        }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 4
+                                            Text { text: "Need a hand?"; color: root.textPrimary; font.pixelSize: 15; font.weight: Font.DemiBold }
+                                            Text {
+                                                text: "Please join us at " + root.discordInvite
+                                                color: root.accent
+                                                font.pixelSize: 13
+                                                wrapMode: Text.WrapAnywhere
+                                                Layout.fillWidth: true
+                                            }
+                                            Text { text: "Scan the code with your phone to get to us for help."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                            Text {
+                                                text: "Debug opens an AI repair session in a foot terminal; the first run may ask you to sign in."
+                                                color: root.textMuted
+                                                visible: root.finishAcknowledged && root.online
+                                                font.pixelSize: 12
+                                                wrapMode: Text.WordWrap
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+                                    }
+                                }
+
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 8
-                                    Button {
-                                        text: root.rebooting ? "Rebooting..." : "Reboot now"
-                                        enabled: root.installFinished && !root.rebooting
+                                    spacing: 10
+                                    BigButton {
+                                        primary: true
+                                        Layout.preferredWidth: 240
+                                        text: "Finish"
+                                        visible: !root.finishAcknowledged && (root.installFinished || root.installFailed)
+                                        onClicked: root.finishAcknowledged = true
+                                    }
+                                    BigButton {
+                                        primary: true
+                                        Layout.preferredWidth: 240
+                                        text: root.rebooting ? "Rebooting..." : "Reboot Now"
+                                        visible: root.finishAcknowledged && root.installFinished && !root.installFailed
+                                        enabled: !root.rebooting
                                         onClicked: {
                                             root.saveGeom();
                                             root.rebooting = true;
                                             root.statusText = "Rebooting...";
-                                            rebootProc.running = true;
+                                            // the goodbye splash covers the screen
+                                            // first; the timer fires the reboot
+                                            root.showSplash = true;
+                                            splashTimer.start();
                                         }
-                                        background: Rectangle { color: parent.enabled ? root.accent : root.bgHover; radius: 12 }
-                                        contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                     }
-                                    Button {
-                                        text: "Close installer"
-                                        enabled: !root.rebooting
-                                        onClicked: { root.saveGeom(); Qt.quit(); }
-                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                        contentItem: Text { text: parent.text; color: root.textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    BigButton {
+                                        primary: true
+                                        Layout.preferredWidth: 240
+                                        text: "Debug"
+                                        visible: root.finishAcknowledged && root.installFailed && root.online
+                                        onClicked: root.startDebug()
+                                    }
+                                    BigButton {
+                                        primary: !root.online
+                                        Layout.preferredWidth: 200
+                                        text: "Retry install"
+                                        visible: root.finishAcknowledged && root.installFailed
+                                        onClicked: {
+                                            root.finishAcknowledged = false;
+                                            root.step = 5;
+                                        }
                                     }
                                     Item { Layout.fillWidth: true }
                                 }
@@ -1110,7 +1428,10 @@ Scope {
                                     color: index === root.step ? Qt.rgba(0.537, 0.706, 0.98, 0.18) : "transparent"
                                     border.color: index === root.step ? root.accent : "transparent"
                                     border.width: 1
-                                    opacity: (!root.locked && index <= root.maxAllowedStep) ? 1.0 : 0.4
+                                    opacity: (!root.locked && (index <= root.maxAllowedStep
+                                        // a failed install unlocks the wizard for a retry; the
+                                        // Finish page stays reachable for Debug / Retry / Discord
+                                        || (index === 6 && root.installFailed))) ? 1.0 : 0.4
                                     RowLayout {
                                         anchors.fill: parent
                                         anchors.margins: 8
@@ -1147,7 +1468,8 @@ Scope {
                                     }
                                     MouseArea {
                                         anchors.fill: parent
-                                        enabled: !root.locked && index <= root.maxAllowedStep
+                                        enabled: !root.locked && (index <= root.maxAllowedStep
+                                            || (index === 6 && root.installFailed))
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: root.step = index
                                     }
@@ -1165,33 +1487,103 @@ Scope {
                     // footer
                     Rectangle {
                         Layout.fillWidth: true
-                        height: 34
+                        height: 64
                         color: "transparent"
                         Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 20
                             anchors.rightMargin: 20
-                            Button {
+                            spacing: 12
+                            BigButton {
                                 text: "Back"
                                 enabled: root.step > 0 && !root.locked
                                 onClicked: root.step--
-                                background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                contentItem: Text { text: parent.text; color: root.textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
-                            Item { Layout.fillWidth: true }
-                            Button {
+                            Text {
+                                // why Next is unavailable, said in one line
+                                text: root.stepHint
+                                visible: root.stepHint !== ""
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                color: root.warn
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                            }
+                            Item { Layout.fillWidth: true; visible: root.stepHint === "" }
+                            BigButton {
+                                primary: true
+                                Layout.preferredWidth: 170
                                 text: "Next"
                                 visible: root.step < 6
+                                // a page with missing details can be entered,
+                                // never passed: the wizard stops right where
+                                // the next required input is
                                 enabled: root.step < 6 && !root.locked && root.step < root.maxAllowedStep
                                 onClicked: { if (root.imported && root.step === 0) root.step = 5; else root.step++; }
-                                background: Rectangle { color: root.accent; radius: 12 }
-                                contentItem: Text { text: parent.text; color: root.bgBase; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    // ---- the goodbye splash -------------------------------------------------
+    // Reboot Now shows this first: the whole screen says goodbye, then the
+    // timer fires the actual reboot. If systemctl cannot reboot, the splash
+    // lifts again so the error stays visible in the installer window.
+    PanelWindow {
+        id: splashWin
+        visible: root.showSplash
+        // wherever the installer window itself lives
+        screen: win.screen
+        anchors { top: true; bottom: true; left: true; right: true }
+        color: "transparent"
+        exclusionMode: ExclusionMode.Ignore
+        aboveWindows: true
+        focusable: false
+
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: "#1a1b26" }
+                GradientStop { position: 1.0; color: "#24283b" }
+            }
+
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 20
+                opacity: root.showSplash ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 450; easing.type: Easing.InOutQuad } }
+
+                Rectangle {
+                    Layout.alignment: Qt.AlignHCenter
+                    width: 88; height: 88; radius: 26
+                    color: root.accent
+                    Text { anchors.centerIn: parent; text: "æ"; color: root.bgBase; font.pixelSize: 44; font.bold: true }
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "Enjoy Your Distro!"
+                    color: root.textPrimary
+                    font.pixelSize: 46
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "Rebooting into your new system..."
+                    color: root.textMuted
+                    font.pixelSize: 16
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: splashTimer
+        interval: 3500
+        repeat: false
+        onTriggered: rebootProc.running = true
     }
 }

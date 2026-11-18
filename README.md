@@ -20,6 +20,32 @@ On the live ISO it lives in `/opt/aequalyn/installer` next to the core tree
 and the package lists ([aequalyn-iso](https://github.com/Aequalyn/aequalyn-iso)
 assembles them). Everything works without AI.
 
+## The end of the wizard
+
+Once Install is pressed the wizard is committed -- the Close installer button
+is gone for good -- and the Finish page tracks the run. Success is staged:
+Finish, then Reboot Now, then a full-screen "Enjoy Your Distro!" splash right
+before the reboot. A failure unlocks the wizard for a retry and shows the
+Discord invite next to its QR code (`assets/discord-qr.png`, regenerate it
+with `segno.make(url, error='m').save(..., scale=10, border=4)` whenever the
+invite changes -- the invite itself lives in the `discordInvite` property in
+`Installer.qml`):
+
+- **Debug** (only with internet) writes `~/.config/opencode/skills/aequalyn-debug/SKILL.md`
+  -- the live ISO and session details, the distribution, the script, config
+  and log locations, and the job: fix the install and get it to the last step,
+  or explain how to restart it -- then opens foot running `opencode --auto`
+  with a prompt that loads the skill (`@aequalyn-debug`).
+- **Retry install** returns to the review page with the config intact.
+- Offline failures get an apology page pointing at the log instead: there is
+  no network to run an AI session on.
+
+Connectivity is probed the way `lib/apply.sh` probes it (`ping -c 1 -W 2
+archlinux.org`); with no internet the proposed package source also defaults
+to the bundled offline repository. The globe on the Identity page takes a
+plain wheel as page scroll and zooms on Ctrl + wheel, so the whole page
+scrolls even with the cursor over it.
+
 ## The qt5 dialog hook
 
 `lib/apply.sh` plants a pacman hook into every fresh install:
