@@ -756,6 +756,15 @@ fi
 if [[ -x /mnt/usr/share/aequalyn/bin/aequalyn-provision-user ]]; then
     arch-chroot /mnt runuser -u "$USERNAME" -- /usr/share/aequalyn/bin/aequalyn-provision-user >/dev/null 2>&1 || true
 fi
+
+# The qt5 dialog patch: plant its pacman hook, so a vlc installed any day
+# after this one gets the fm's open/save dialogs the moment pacman finishes
+# (the migration brings the same hook to installs made before it existed,
+# but this machine is fresh, so here it is planted outright).
+if [[ -x /mnt/usr/share/aequalyn/bin/aequalyn-qt5-dialogs ]]; then
+    arch-chroot /mnt /usr/share/aequalyn/bin/aequalyn-qt5-dialogs --install-hook >/dev/null 2>&1 || true
+fi
+
 cp "$CONFIG" /mnt/etc/aequalyn/install.toml
 printf 'Aequalyn %s\n' "$(cat "$AEQUALYN_ROOT/VERSION" 2>/dev/null || echo 0.1.0)" > /mnt/etc/aequalyn/release
 
