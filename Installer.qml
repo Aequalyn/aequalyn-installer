@@ -732,7 +732,10 @@ Scope {
         stdinEnabled: true
         command: ["bash", "-c", "mkdir -p \"$(dirname " + JSON.stringify(root.geomPath) + ")\" && tee " + JSON.stringify(root.geomPath)]
         onStarted: {
-            write("x=" + win.x + "\ny=" + win.y + "\nwidth=" + win.width + "\nheight=" + win.height + "\n");
+            // Only the size is remembered. Wayland never lets a window place
+            // itself -- the compositor decides where it opens -- and this
+            // Quickshell's FloatingWindow has no x/y to read or write anyway.
+            write("width=" + win.width + "\nheight=" + win.height + "\n");
         }
     }
 
@@ -748,10 +751,9 @@ Scope {
                 const k = kv[0].trim();
                 const v = parseInt(kv[1].trim());
                 if (isNaN(v)) continue;
-                if (k === "x" && !isNaN(v)) win.x = v;
-                if (k === "y" && !isNaN(v)) win.y = v;
-                if (k === "width") win.width = v;
-                if (k === "height") win.height = v;
+                // x/y lines from older configs are ignored on purpose.
+                if (k === "width") win.implicitWidth = v;
+                if (k === "height") win.implicitHeight = v;
             }
         }
     }
@@ -1233,173 +1235,182 @@ Scope {
                         // kill the apply, and after it there is nothing left to
                         // decide but reboot, retry or debug.
                         Item {
-                            ColumnLayout {
+                            // scrollable like every other page: on a small
+                            // window the log + the help boxes + the action
+                            // row together are taller than the viewport, and
+                            // the buttons must stay reachable
+                            ScrollView {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                spacing: 10
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                ColumnLayout {
+                                    width: parent.width
+                                    spacing: 10
 
-                                Text {
-                                    text: (root.writing || root.applying) ? "Installing Aequalyn..."
-                                         : root.installFinished ? "Installation complete"
-                                         : root.installFailed ? "Installation failed"
-                                         : "Finish"
-                                    color: root.installFailed ? root.warn : (root.installFinished ? root.ok : root.textPrimary)
-                                    font.pixelSize: 20
-                                    font.weight: Font.DemiBold
-                                }
-                                Text {
-                                    text: root.statusText
-                                    color: (root.writing || root.applying) ? root.textSecondary
-                                         : root.installFinished ? root.ok
-                                         : root.installFailed ? root.warn : root.textSecondary
-                                    visible: root.statusText !== ""
-                                    font.pixelSize: 12
-                                    wrapMode: Text.WrapAnywhere
-                                    Layout.fillWidth: true
-                                }
-                                ProgressBar {
-                                    Layout.fillWidth: true
-                                    implicitHeight: 16
-                                    indeterminate: root.writing || root.applying
-                                    value: (root.writing || root.applying) ? 0 : 1
-                                }
-                                LogView {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    Layout.minimumHeight: 160
-                                }
-
-                                // Offline failure: no AI debug session without
-                                // the network, so say sorry and point at the log.
-                                Rectangle {
-                                    visible: root.installFailed && !root.online
-                                    Layout.fillWidth: true
-                                    implicitHeight: apologyCol.implicitHeight + 20
-                                    radius: 12
-                                    color: root.bgSurface
-                                    border.color: root.warn
-                                    border.width: 1
-                                    ColumnLayout {
-                                        id: apologyCol
-                                        anchors.fill: parent
-                                        anchors.margins: 10
-                                        spacing: 4
-                                        Text {
-                                            text: "Your installation failed, please review the log at the path below and retry. We are sorry for this inconvenience."
-                                            color: root.textPrimary
-                                            font.pixelSize: 14
-                                            wrapMode: Text.WordWrap
-                                            Layout.fillWidth: true
-                                        }
-                                        Text {
-                                            text: root.logFile
-                                            color: root.accent
-                                            font.family: "monospace"
-                                            font.pixelSize: 12
-                                            wrapMode: Text.WrapAnywhere
-                                            Layout.fillWidth: true
-                                        }
+                                    Text {
+                                        text: (root.writing || root.applying) ? "Installing Aequalyn..."
+                                             : root.installFinished ? "Installation complete"
+                                             : root.installFailed ? "Installation failed"
+                                             : "Finish"
+                                        color: root.installFailed ? root.warn : (root.installFinished ? root.ok : root.textPrimary)
+                                        font.pixelSize: 20
+                                        font.weight: Font.DemiBold
                                     }
-                                }
-
-                                // Any failure: human help, one scan away.
-                                Rectangle {
-                                    visible: root.installFailed
-                                    Layout.fillWidth: true
-                                    implicitHeight: discordRow.implicitHeight + 20
-                                    radius: 12
-                                    color: root.bgSurface
-                                    border.color: root.border
-                                    border.width: 1
-                                    RowLayout {
-                                        id: discordRow
-                                        anchors.fill: parent
-                                        anchors.margins: 10
-                                        spacing: 14
-                                        // white card: a QR scans best dark on light
-                                        Rectangle {
-                                            Layout.preferredWidth: 140
-                                            Layout.preferredHeight: 140
-                                            radius: 10
-                                            color: "#ffffff"
-                                            Image {
-                                                anchors.centerIn: parent
-                                                source: Qt.resolvedUrl("assets/discord-qr.png")
-                                                asynchronous: true
-                                                width: 124
-                                                height: 124
-                                                fillMode: Image.PreserveAspectFit
-                                                smooth: true
-                                            }
-                                        }
+                                    Text {
+                                        text: root.statusText
+                                        color: (root.writing || root.applying) ? root.textSecondary
+                                             : root.installFinished ? root.ok
+                                             : root.installFailed ? root.warn : root.textSecondary
+                                        visible: root.statusText !== ""
+                                        font.pixelSize: 12
+                                        wrapMode: Text.WrapAnywhere
+                                        Layout.fillWidth: true
+                                    }
+                                    ProgressBar {
+                                        Layout.fillWidth: true
+                                        implicitHeight: 16
+                                        indeterminate: root.writing || root.applying
+                                        value: (root.writing || root.applying) ? 0 : 1
+                                    }
+                                    LogView {
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        Layout.minimumHeight: 160
+                                    }
+    
+                                    // Offline failure: no AI debug session without
+                                    // the network, so say sorry and point at the log.
+                                    Rectangle {
+                                        visible: root.installFailed && !root.online
+                                        Layout.fillWidth: true
+                                        implicitHeight: apologyCol.implicitHeight + 20
+                                        radius: 12
+                                        color: root.bgSurface
+                                        border.color: root.warn
+                                        border.width: 1
                                         ColumnLayout {
-                                            Layout.fillWidth: true
+                                            id: apologyCol
+                                            anchors.fill: parent
+                                            anchors.margins: 10
                                             spacing: 4
-                                            Text { text: "Need a hand?"; color: root.textPrimary; font.pixelSize: 15; font.weight: Font.DemiBold }
                                             Text {
-                                                text: "Please join us at " + root.discordInvite
-                                                color: root.accent
-                                                font.pixelSize: 13
-                                                wrapMode: Text.WrapAnywhere
-                                                Layout.fillWidth: true
-                                            }
-                                            Text { text: "Scan the code with your phone to get to us for help."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                            Text {
-                                                text: "Debug opens an AI repair session in a foot terminal; the first run may ask you to sign in."
-                                                color: root.textMuted
-                                                visible: root.finishAcknowledged && root.online
-                                                font.pixelSize: 12
+                                                text: "Your installation failed, please review the log at the path below and retry. We are sorry for this inconvenience."
+                                                color: root.textPrimary
+                                                font.pixelSize: 14
                                                 wrapMode: Text.WordWrap
                                                 Layout.fillWidth: true
                                             }
+                                            Text {
+                                                text: root.logFile
+                                                color: root.accent
+                                                font.family: "monospace"
+                                                font.pixelSize: 12
+                                                wrapMode: Text.WrapAnywhere
+                                                Layout.fillWidth: true
+                                            }
                                         }
                                     }
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 10
-                                    BigButton {
-                                        primary: true
-                                        Layout.preferredWidth: 240
-                                        text: "Finish"
-                                        visible: !root.finishAcknowledged && (root.installFinished || root.installFailed)
-                                        onClicked: root.finishAcknowledged = true
-                                    }
-                                    BigButton {
-                                        primary: true
-                                        Layout.preferredWidth: 240
-                                        text: root.rebooting ? "Rebooting..." : "Reboot Now"
-                                        visible: root.finishAcknowledged && root.installFinished && !root.installFailed
-                                        enabled: !root.rebooting
-                                        onClicked: {
-                                            root.saveGeom();
-                                            root.rebooting = true;
-                                            root.statusText = "Rebooting...";
-                                            // the goodbye splash covers the screen
-                                            // first; the timer fires the reboot
-                                            root.showSplash = true;
-                                            splashTimer.start();
+    
+                                    // Any failure: human help, one scan away.
+                                    Rectangle {
+                                        visible: root.installFailed
+                                        Layout.fillWidth: true
+                                        implicitHeight: discordRow.implicitHeight + 20
+                                        radius: 12
+                                        color: root.bgSurface
+                                        border.color: root.border
+                                        border.width: 1
+                                        RowLayout {
+                                            id: discordRow
+                                            anchors.fill: parent
+                                            anchors.margins: 10
+                                            spacing: 14
+                                            // white card: a QR scans best dark on light
+                                            Rectangle {
+                                                Layout.preferredWidth: 140
+                                                Layout.preferredHeight: 140
+                                                radius: 10
+                                                color: "#ffffff"
+                                                Image {
+                                                    anchors.centerIn: parent
+                                                    source: Qt.resolvedUrl("assets/discord-qr.png")
+                                                    asynchronous: true
+                                                    width: 124
+                                                    height: 124
+                                                    fillMode: Image.PreserveAspectFit
+                                                    smooth: true
+                                                }
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 4
+                                                Text { text: "Need a hand?"; color: root.textPrimary; font.pixelSize: 15; font.weight: Font.DemiBold }
+                                                Text {
+                                                    text: "Please join us at " + root.discordInvite
+                                                    color: root.accent
+                                                    font.pixelSize: 13
+                                                    wrapMode: Text.WrapAnywhere
+                                                    Layout.fillWidth: true
+                                                }
+                                                Text { text: "Scan the code with your phone to get to us for help."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                                Text {
+                                                    text: "Debug opens an AI repair session in a foot terminal; the first run may ask you to sign in."
+                                                    color: root.textMuted
+                                                    visible: root.finishAcknowledged && root.online
+                                                    font.pixelSize: 12
+                                                    wrapMode: Text.WordWrap
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
                                         }
                                     }
-                                    BigButton {
-                                        primary: true
-                                        Layout.preferredWidth: 240
-                                        text: "Debug"
-                                        visible: root.finishAcknowledged && root.installFailed && root.online
-                                        onClicked: root.startDebug()
-                                    }
-                                    BigButton {
-                                        primary: !root.online
-                                        Layout.preferredWidth: 200
-                                        text: "Retry install"
-                                        visible: root.finishAcknowledged && root.installFailed
-                                        onClicked: {
-                                            root.finishAcknowledged = false;
-                                            root.step = 5;
+    
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+                                        BigButton {
+                                            primary: true
+                                            Layout.preferredWidth: 240
+                                            text: "Finish"
+                                            visible: !root.finishAcknowledged && (root.installFinished || root.installFailed)
+                                            onClicked: root.finishAcknowledged = true
                                         }
+                                        BigButton {
+                                            primary: true
+                                            Layout.preferredWidth: 240
+                                            text: root.rebooting ? "Rebooting..." : "Reboot Now"
+                                            visible: root.finishAcknowledged && root.installFinished && !root.installFailed
+                                            enabled: !root.rebooting
+                                            onClicked: {
+                                                root.saveGeom();
+                                                root.rebooting = true;
+                                                root.statusText = "Rebooting...";
+                                                // the goodbye splash covers the screen
+                                                // first; the timer fires the reboot
+                                                root.showSplash = true;
+                                                splashTimer.start();
+                                            }
+                                        }
+                                        BigButton {
+                                            primary: true
+                                            Layout.preferredWidth: 240
+                                            text: "Debug"
+                                            visible: root.finishAcknowledged && root.installFailed && root.online
+                                            onClicked: root.startDebug()
+                                        }
+                                        BigButton {
+                                            primary: !root.online
+                                            Layout.preferredWidth: 200
+                                            text: "Retry install"
+                                            visible: root.finishAcknowledged && root.installFailed
+                                            onClicked: {
+                                                root.finishAcknowledged = false;
+                                                root.step = 5;
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
                                     }
-                                    Item { Layout.fillWidth: true }
                                 }
                             }
                         }
