@@ -20,6 +20,52 @@ On the live ISO it lives in `/opt/aequalyn/installer` next to the core tree
 and the package lists ([aequalyn-iso](https://github.com/Aequalyn/aequalyn-iso)
 assembles them). Everything works without AI.
 
+## The flow, screen by screen
+
+Every screen, captured from a real session (`screenshots/`; the identity,
+timezone and disk values are representative).
+
+**1-2 · Welcome and Identity** -- the hardware proposal with the
+connectivity verdict and the import row; then hostname, user, keymap,
+password and the timezone globe: drag to rotate, click a station, and
+scroll the page straight through the globe (Ctrl + scroll zooms it).
+
+| ![](screenshots/01-welcome.png) | ![](screenshots/02-identity.png) |
+
+**3-4 · Disk and Packages** -- the target, the install mode, LUKS2 and the
+ESP size; then profiles, browser, Flatpak and the package source, which
+proposes the bundled offline repository when there is no internet.
+
+| ![](screenshots/03-disk.png) | ![](screenshots/04-packages.png) |
+
+**5-6 · Aequalyn and Review** -- the colour mode and the GTK theming; then
+the exact `install.toml` about to be applied, with the Install button that
+commits the wizard (the Close installer button never comes back after it).
+
+| ![](screenshots/05-aequalyn.png) | ![](screenshots/06-review.png) |
+
+**7-8 · The run, and the moment it completes** -- progress and the live log
+while the wizard is locked; then Finish acknowledges the result.
+
+| ![](screenshots/07-installing.png) | ![](screenshots/08-success.png) |
+
+**9 · The goodbye** -- Reboot Now follows Finish, and the full-screen
+"Enjoy Your Distro!" splash covers everything right before the reboot.
+
+| ![](screenshots/09-reboot-now.png) | ![](screenshots/13-splash.png) |
+
+**10-11 · A failure, online** -- the wizard unlocks for a retry and the
+Discord invite appears with a scannable QR. Debug opens an AI repair
+session in foot (`opencode --auto` on a generated skill); Retry goes back
+to the review page with the config intact.
+
+| ![](screenshots/10-failure.png) | ![](screenshots/11-debug.png) |
+
+**12 · A failure, offline** -- no network, no AI session: an apology page
+pointing at the log instead.
+
+| ![](screenshots/12-failure-offline.png) |
+
 ## The end of the wizard
 
 Once Install is pressed the wizard is committed -- the Close installer button
