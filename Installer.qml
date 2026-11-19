@@ -1902,7 +1902,7 @@ Scope {
                                     { key: "install", glyph: "\u{F02CA}", title: "Install Aequalyn",
                                       about: "Put Aequalyn on this computer: choose a disk, your account and your apps, review everything, then install." },
                                     { key: "repair", glyph: "\u{F05B7}", title: "Repair an installation",
-                                      about: "Unlock and mount an Aequalyn already on a disk and enter it, to fix what keeps it from starting." },
+                                      about: "Fix an Aequalyn already on a disk: refresh its keyring, reinstall its kernel or bootloader, or open a shell in it." },
                                     { key: "manual", glyph: "\u{F0219}", title: "Read the manual",
                                       about: "Aequalyn's README from this ISO: what it is, its desktop, its keys and its tools." }
                                 ]
@@ -1974,7 +1974,7 @@ Scope {
                     }
                 }
 
-                // ---- repair: the steps aequalyn-repair walks through, in a terminal -------
+                // ---- repair: four ways, each run by aequalyn-repair in a terminal ---------
                 Item {
                     visible: root.page === "repair"
                     Layout.fillWidth: true
@@ -1982,59 +1982,95 @@ Scope {
                     Layout.margins: 20
                     Layout.minimumHeight: 0
                     Layout.preferredHeight: 0
-                RowLayout {
+                ColumnLayout {
                     anchors.fill: parent
-                    spacing: 20
+                    spacing: 16
 
-                    ColumnLayout {
+                    Text {
+                        text: "Every repair first asks for the disk Aequalyn is on and its system partition, unlocks it if it is encrypted, and mounts it. Then it does one of these:"
+                        color: root.textSecondary
+                        font.pixelSize: 13
+                        wrapMode: Text.WordWrap
                         Layout.fillWidth: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        spacing: 14
-                        Group {
-                            title: "What Repair does"
-                            hint: "It runs in a terminal, one question at a time, and changes nothing on its own: it opens your installed system for you to fix."
-                            InfoRow { first: true; label: "1  Disk"; value: "Choose the disk Aequalyn is installed on" }
-                            InfoRow { label: "2  Partition"; value: "Choose its system partition" }
-                            InfoRow { label: "3  Unlock"; value: "An encrypted (LUKS) partition asks for its passphrase" }
-                            InfoRow { label: "4  Mount"; value: "The system, its Btrfs subvolumes and /boot, under /mnt" }
-                            InfoRow { label: "5  Enter"; value: "arch-chroot into it, if you say so, to fix it from inside" }
-                        }
-                        RowLayout {
-                            spacing: 10
-                            Btn {
-                                text: "Start repair"
-                                primary: true
-                                enabled: root.isRoot
-                                onClicked: {
-                                    Quickshell.execDetached(["foot", "-T", "Aequalyn repair", "bash", root.installerDir + "/aequalyn-repair"]);
-                                    root.statusText = "Repair opened in a terminal.";
+                    }
+                    GridLayout {
+                        columns: 2
+                        rowSpacing: 14
+                        columnSpacing: 14
+                        Layout.fillWidth: true
+                        Repeater {
+                            model: [
+                                { key: "keyring", glyph: "\u{F0306}", title: "Refresh the Arch Linux keyring",
+                                  about: "For updates that fail with \"invalid or corrupted package (PGP signature)\": sets up pacman's keys again and, online, installs the newest keyring." },
+                                { key: "kernel", glyph: "\u{F033D}", title: "Reinstall the kernel",
+                                  about: "For a system that stops while starting: reinstalls its kernels and rebuilds the boot files. Without internet it uses the kernel on this ISO." },
+                                { key: "bootloader", glyph: "\u{F0425}", title: "Reinstall the bootloader",
+                                  about: "For a computer that no longer shows Aequalyn when it starts: puts Limine back, with the firmware's boot entry and the menu's entries." },
+                                { key: "manual", glyph: "\u{F018D}", title: "Manual",
+                                  about: "A root shell inside the installed system (arch-chroot), to fix it yourself. Type exit when you are done." }
+                            ]
+                            delegate: Rectangle {
+                                id: rcard
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                implicitHeight: 128
+                                radius: 16
+                                color: rArea.containsMouse && root.isRoot ? root.bgHover : root.bgCard
+                                border.width: 1
+                                border.color: rArea.containsMouse && root.isRoot ? root.accent : root.border
+                                opacity: root.isRoot ? 1 : 0.6
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                Accessible.role: Accessible.Button
+                                Accessible.name: rcard.modelData.title
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 18
+                                    spacing: 16
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignTop
+                                        implicitWidth: 46; implicitHeight: 46; radius: 12
+                                        color: root.bgSelected
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: rcard.modelData.glyph
+                                            font.family: "JetBrainsMono Nerd Font"
+                                            font.pixelSize: 23
+                                            color: root.accent
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignTop
+                                        spacing: 6
+                                        Text { text: rcard.modelData.title; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                        Text { text: rcard.modelData.about; color: root.textSecondary; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                    }
+                                }
+                                MouseArea {
+                                    id: rArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: root.isRoot
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        Quickshell.execDetached(["foot", "-T", "Aequalyn repair: " + rcard.modelData.title,
+                                            "bash", root.installerDir + "/aequalyn-repair", "--mode", rcard.modelData.key]);
+                                        root.statusText = rcard.modelData.title + " opened in a terminal.";
+                                    }
                                 }
                             }
-                            Text {
-                                text: root.isRoot ? root.statusText : "Repair needs root: start the installer with sudo aequalyn-install."
-                                visible: text !== ""
-                                color: root.isRoot ? root.textMuted : root.warn
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
                         }
                     }
-                    ColumnLayout {
+                    Text {
+                        text: root.isRoot ? root.statusText : "Repair needs root: start the installer with sudo aequalyn-install."
+                        visible: text !== ""
+                        color: root.isRoot ? root.textMuted : root.warn
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
                         Layout.fillWidth: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        spacing: 14
-                        Group {
-                            title: "Once inside"
-                            hint: "Commands that fix most systems that will not start; type exit when you are done, and Repair unmounts everything."
-                            InfoRow { first: true; label: "Boot files"; value: "mkinitcpio -P"; valueColor: root.accent }
-                            InfoRow { label: "Updates"; value: "pacman -Syu"; valueColor: root.accent }
-                            InfoRow { label: "Password"; value: "passwd <user>"; valueColor: root.accent }
-                            InfoRow { label: "Leave"; value: "exit"; valueColor: root.accent }
-                        }
                     }
+                    Item { Layout.fillHeight: true }
                 }
                 }
 

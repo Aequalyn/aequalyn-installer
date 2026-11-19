@@ -2,6 +2,12 @@
 
 # System Repair Script for Arch Linux Live ISO
 # Allows disk selection, auto-detects encryption, mounts the system and chroots into it
+#
+#   aequalyn-repair                   pick the disk, mount it, then ask about a chroot
+#   aequalyn-repair --mode keyring    ... then refresh the Arch Linux keyring
+#   aequalyn-repair --mode kernel     ... then reinstall the kernel(s) and rebuild the boot files
+#   aequalyn-repair --mode bootloader ... then reinstall Limine and its boot entries
+#   aequalyn-repair --mode manual     ... then go straight into a chroot shell
 
 set -euo pipefail
 
@@ -20,6 +26,7 @@ ROOT_DEVICE=""
 CRYPT_NAME="cryptroot"
 MOUNT_POINT="/mnt"
 FILESYSTEM=""
+MODE=""
 
 # Functions
 print_status() {
@@ -364,6 +371,137 @@ ask_chroot() {
     esac
 }
 
+# ---- repair modes ----------------------------------------------------------
+# Each runs after the system is mounted. The installed system's own fstab is
+# mounted first, so /boot is where Aequalyn keeps it (its EFI partition, with
+# Limine) whatever was guessed above.
+mount_from_fstab() {
+    if [[ -f "$MOUNT_POINT/etc/fstab" ]]; then
+        if arch-chroot "$MOUNT_POINT" mount -a 2>/dev/null; then
+            print_success "Mounted the system's own fstab entries"
+        else
+            print_warning "Some fstab entries could not be mounted; carrying on with the rest"
+        fi
+    fi
+}
+
+online() { ping -c1 -W3 archlinux.org >/dev/null 2>&1; }
+
+# 1. pacman refuses packages ("invalid or corrupted package (PGP signature)")
+#    when the keyring is old or broken
+repair_keyring() {
+    if [[ -f "$MOUNT_POINT/var/lib/pacman/db.lck" ]]; then
+        rm -f "$MOUNT_POINT/var/lib/pacman/db.lck"
+        print_success "Removed a stale pacman lock (an update that was interrupted)"
+    fi
+    print_status "Setting up pacman's keys again..."
+    if ! arch-chroot "$MOUNT_POINT" sh -c 'pacman-key --init && pacman-key --populate archlinux' >/dev/null; then
+        print_error "pacman-key failed; read the messages above"
+        return 1
+    fi
+    print_success "Keys set up from the installed keyring"
+    if online; then
+        print_status "Installing the newest archlinux-keyring..."
+        if arch-chroot "$MOUNT_POINT" pacman -Sy --noconfirm archlinux-keyring; then
+            arch-chroot "$MOUNT_POINT" pacman-key --populate archlinux >/dev/null
+            print_success "Keyring up to date"
+        else
+            print_error "Could not install archlinux-keyring; read the messages above"
+            return 1
+        fi
+    else
+        print_warning "No internet connection: the keyring was refreshed from what is installed, not updated"
+    fi
+}
+
+# 2. a kernel or initramfs that no longer boots
+repair_kernel() {
+    local kernels=() k
+    for k in linux linux-lts linux-zen linux-hardened; do
+        arch-chroot "$MOUNT_POINT" pacman -Q "$k" >/dev/null 2>&1 && kernels+=("$k")
+    done
+    if (( ${#kernels[@]} == 0 )); then
+        print_error "No kernel package is installed on this system"
+        return 1
+    fi
+    print_status "Reinstalling ${kernels[*]}..."
+    if online; then
+        arch-chroot "$MOUNT_POINT" pacman -Sy --noconfirm "${kernels[@]}" || { print_error "Reinstalling failed; read the messages above"; return 1; }
+    else
+        # offline: the kernels this ISO carries in its offline repository
+        local stage="$MOUNT_POINT/var/cache/aequalyn-repair" files=() f
+        mkdir -p "$stage"
+        for k in "${kernels[@]}"; do
+            f=$(compgen -G "/var/cache/offline-repo/$k-[0-9]*.pkg.tar.zst" | sort -V | tail -n1 || true)
+            [[ -n "$f" ]] && cp -f "$f" "$stage/" && files+=("/var/cache/aequalyn-repair/$(basename "$f")")
+        done
+        if (( ${#files[@]} == 0 )); then
+            rm -rf "$stage"
+            print_error "No internet connection, and this ISO carries none of these kernels; connect first"
+            return 1
+        fi
+        print_warning "No internet connection: installing the kernel from this ISO"
+        arch-chroot "$MOUNT_POINT" pacman -U --noconfirm "${files[@]}" || { rm -rf "$stage"; print_error "Reinstalling failed; read the messages above"; return 1; }
+        rm -rf "$stage"
+    fi
+    print_status "Rebuilding the boot files (mkinitcpio -P)..."
+    arch-chroot "$MOUNT_POINT" mkinitcpio -P && print_success "Kernel reinstalled and boot files rebuilt" \
+        || { print_error "mkinitcpio failed; read the messages above"; return 1; }
+}
+
+# 3. Limine: its files on the EFI partition (or the disk, on BIOS), the firmware's
+#    boot entry, and the menu's kernel entries (written by its mkinitcpio hook)
+repair_bootloader() {
+    if [[ -d /sys/firmware/efi ]]; then
+        print_status "Reinstalling Limine on the EFI partition..."
+        arch-chroot "$MOUNT_POINT" sh -c 'mkdir -p /boot/EFI/limine /boot/EFI/BOOT \
+            && cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/ \
+            && cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI' \
+            || { print_error "Could not copy Limine to /boot/EFI"; return 1; }
+        print_success "Limine reinstalled"
+        # the firmware's boot entry, added again only when it is gone
+        if efibootmgr 2>/dev/null | grep -q "Aequalyn (Limine)"; then
+            print_success "The firmware's Aequalyn boot entry is there"
+        else
+            local esp disk part
+            esp=$(findmnt -no SOURCE "$MOUNT_POINT/boot" 2>/dev/null || true)
+            disk=$(lsblk -no PKNAME "$esp" 2>/dev/null | head -n1)
+            part=$(lsblk -no PARTN "$esp" 2>/dev/null | head -n1)
+            if [[ -n "$disk" && -n "$part" ]] && efibootmgr --create --disk "/dev/$disk" --part "$part" \
+                --label "Aequalyn (Limine)" --loader '\EFI\limine\BOOTX64.EFI' --unicode >/dev/null; then
+                print_success "Added the firmware's Aequalyn boot entry"
+            else
+                print_warning "Could not add a firmware boot entry; the fallback EFI/BOOT/BOOTX64.EFI still boots"
+            fi
+        fi
+    else
+        print_status "Reinstalling Limine for BIOS on $SELECTED_DISK..."
+        arch-chroot "$MOUNT_POINT" sh -c "cp /usr/share/limine/limine-bios.sys /boot/ && limine bios-install $SELECTED_DISK" \
+            || { print_error "limine bios-install failed"; return 1; }
+        print_success "Limine reinstalled"
+    fi
+    print_status "Writing the boot menu's entries again (mkinitcpio -P)..."
+    arch-chroot "$MOUNT_POINT" mkinitcpio -P >/dev/null && print_success "Boot menu entries written" \
+        || { print_error "mkinitcpio failed; run the kernel repair"; return 1; }
+}
+
+run_mode() {
+    mount_from_fstab
+    local rc=0
+    case "$MODE" in
+        keyring)    repair_keyring || rc=$? ;;
+        kernel)     repair_kernel || rc=$? ;;
+        bootloader) repair_bootloader || rc=$? ;;
+        manual)     enter_chroot ;;
+    esac
+    if [[ "$MODE" != manual ]]; then
+        echo
+        if (( rc == 0 )); then print_success "Repair finished. Reboot to try your system."
+        else print_warning "Repair finished with problems; read the messages above."; fi
+        read -rp "Press Enter to unmount everything and close..." _
+    fi
+}
+
 cleanup_and_exit() {
     print_status "Cleaning up..."
 
@@ -381,6 +519,19 @@ cleanup_and_exit() {
 }
 
 main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --mode) MODE=${2:-}; shift 2 ;;
+            --mode=*) MODE=${1#--mode=}; shift ;;
+            -h|--help) sed -n '3,10p' "$0"; exit 0 ;;
+            *) print_error "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    case "$MODE" in
+        ""|keyring|kernel|bootloader|manual) ;;
+        *) print_error "Unknown mode: $MODE (keyring, kernel, bootloader or manual)"; exit 1 ;;
+    esac
+
     if [[ $EUID -ne 0 ]]; then
         print_error "This script must be run as root."
         exit 1
@@ -406,7 +557,7 @@ main() {
     mount_boot_partitions
     mount_virtual_filesystems
 
-    ask_chroot
+    if [[ -n "$MODE" ]]; then run_mode; else ask_chroot; fi
 }
 
 # Run main function

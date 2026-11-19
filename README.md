@@ -8,7 +8,7 @@ approve.
 | --- | --- |
 | `aequalyn-install` | QML wizard + applier (`--config install.toml` for unattended installs) |
 | `aequalyn-detect` | Hardware detection and a proposed profile (`aequalyn-install --detect`) |
-| `aequalyn-repair` | Chroot into an existing install from the live ISO |
+| `aequalyn-repair` | Repair an existing install from the live ISO: refresh its keyring, reinstall its kernel or bootloader, or open a shell in it (`--mode` keyring, kernel, bootloader or manual) |
 | `lib/apply.sh` | Partitioning (full wipe, dual boot, manual), LUKS2, Btrfs subvolumes, Limine, snapper |
 | `install.toml.example` | Every option, documented |
 
