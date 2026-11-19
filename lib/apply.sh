@@ -961,7 +961,9 @@ if [[ -f /usr/lib/systemd/system/limine-snapper-sync.service ]]; then
     systemctl enable snapper-cleanup.timer >/dev/null 2>&1 || true
 fi
 u=$(id -un 1000 2>/dev/null || true)
-[[ -n "$u" ]] && su - "$u" -c 'aequalyn-theme "$HOME/Pictures/Wallpapers/beach.jpg"' >/dev/null 2>&1 || true
+# colours from the wallpaper the install set (the Aequalyn theme's, or the sample
+# one), without putting a different wallpaper on
+[[ -n "$u" ]] && su - "$u" -c 'aequalyn-theme --refresh' >/dev/null 2>&1 || true
 rm -f "$C"
 systemctl disable aequalyn-first-boot.service >/dev/null 2>&1 || true
 EOF
