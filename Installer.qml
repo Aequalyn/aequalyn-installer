@@ -8,19 +8,49 @@ import QtQuick.Layouts
 Scope {
     id: root
 
-    // ---- colours: the Aequalyn palette the control center opens with (Basalt) ------
-    readonly property color bgBase: "#121515"
-    readonly property color bgCard: "#1a1f1f"
-    readonly property color bgSurface: "#1a1f1f"
-    readonly property color bgHover: "#202727"
-    readonly property color bgSelected: "#26383a"
-    readonly property color border: "#2f3a3a"
-    readonly property color textPrimary: "#dde5e3"
-    readonly property color textSecondary: "#b2bfbc"
-    readonly property color textMuted: "#6c7a78"
-    readonly property color accent: "#4fc1b0"
-    readonly property color ok: "#8bc79a"
-    readonly property color warn: "#e06c6c"
+    // ---- colours: the Aequalyn palette, dark; while the desktop wears a light theme
+    // (Aequalyn Day, or any theme whose theme.json says "variant": "light"), Aequalyn
+    // Day's. Read from the desktop user's theme.conf (see themeProbe) ----------------
+    property bool light: false
+    readonly property color bgBase: light ? "#f0f6f7" : "#121515"
+    readonly property color bgCard: light ? "#e6eff2" : "#1a1f1f"
+    readonly property color bgSurface: light ? "#e6eff2" : "#1a1f1f"
+    readonly property color bgHover: light ? "#dce9ec" : "#202727"
+    readonly property color bgSelected: light ? "#c8dfe4" : "#26383a"
+    readonly property color border: light ? "#c6d8dd" : "#2f3a3a"
+    readonly property color textPrimary: light ? "#1d2027" : "#dde5e3"
+    readonly property color textSecondary: light ? "#4d5156" : "#b2bfbc"
+    readonly property color textMuted: light ? "#81868a" : "#6c7a78"
+    readonly property color accent: light ? "#2a766b" : "#4fc1b0"
+    readonly property color ok: light ? "#3c7d4c" : "#8bc79a"
+    readonly property color warn: light ? "#c8323e" : "#e06c6c"
+
+    // The desktop's theme: the installer runs as root (sudo -E), so the theme is the
+    // one of the user who started it. Asked again every few seconds, so switching
+    // themes while the installer is open turns it light or dark too.
+    readonly property string desktopHome: Quickshell.env("SUDO_USER") ? "/home/" + Quickshell.env("SUDO_USER") : Quickshell.env("HOME")
+    Process {
+        id: themeProbe
+        command: ["sh", "-c",
+            'c=$(cat "$1/.config/quickshell/theme.conf" 2>/dev/null); id=${c#theme:}; '
+            + '[ "$id" = "$c" ] && { echo dark; exit 0; }; '
+            + 'for d in "$1/.config/aequalyn/themes" "$1/.local/share/aequalyn/themes" /usr/share/aequalyn/themes; do '
+            + 'f="$d/$id/theme.json"; [ -f "$f" ] || continue; '
+            + 'grep -q \'"variant"[[:space:]]*:[[:space:]]*"light"\' "$f" && echo light || echo dark; exit 0; done; echo dark',
+            "sh", root.desktopHome]
+        running: true
+        stdout: StdioCollector { onStreamFinished: root.light = text.trim() === "light" }
+    }
+    Timer { interval: 3000; repeat: true; running: true; onTriggered: if (!themeProbe.running) themeProbe.running = true }
+
+    // ---- what the installer opens on: install, repair or read the manual --------
+    // "" is the start page; "install" is the wizard below; the other two have a page each
+    property string page: ""
+    readonly property string manualPath: root.installerDir + "/../README.md"
+    // the bar widgets' names as the installer shows them
+    function widgetName(id) {
+        return ({ settingsbutton: "settings-button", screenrecorder: "screen-recorder", appsmenu: "apps-menu" })[id] || id;
+    }
 
     property string installerDir: Quickshell.env("AEQUALYN_INSTALLER_DIR") || "/opt/aequalyn/installer"
     property string detectScript: root.installerDir + "/aequalyn-detect"
@@ -76,9 +106,10 @@ Scope {
     // Top bar layout (widget ids per region, left -> right). These are the
     // reference positions shipped on the ISO; leaving them editable in
     // install.toml lets a reinstall restore a customised bar exactly.
-    property var barLeft: ["appsmenu", "workspaces", "layouts", "network", "atelier"]
-    property var barCenter: ["clock", "media", "title", "battery", "volume"]
-    property var barRight: ["brightness", "cpu", "bluetooth", "temperature", "caffeine", "tray", "screenrecorder", "screenshot", "power", "settingsbutton", "plume", "altscape"]
+    // the ISO's bar: the other widgets stay off until turned on in Settings
+    property var barLeft: ["appsmenu", "workspaces"]
+    property var barCenter: ["clock", "media"]
+    property var barRight: ["network", "bluetooth", "volume", "battery", "tray", "plume", "altscape", "settingsbutton", "power"]
 
     property bool dryRun: false
     property bool writing: false
@@ -271,8 +302,11 @@ Scope {
     // view once per line, so a burst of mkinitcpio output cannot block the GUI.
     function appendLog(line) {
         if (line === undefined || line === null) return;
-        const s = String(line);
-        if (s.length === 0) return;
+        // apply.sh colours its labels for a terminal: drop the escape codes, and say
+        // OK with a tick
+        const s = String(line).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "")
+            .replace(/^\s*OK\s+/, "\u2705 ");
+        if (s.trim().length === 0) return;
         root.logQueue.push({ line: s });
         if (!logFlushTimer.running) logFlushTimer.start();
     }
@@ -664,8 +698,10 @@ Scope {
         property string value: ""
         property bool first: false
         property color valueColor: root.textPrimary
+        // long values wrap onto more lines instead of being shortened in the middle
+        property bool wrap: false
         Layout.fillWidth: true
-        implicitHeight: 34
+        implicitHeight: ir.wrap ? Math.max(34, irValue.implicitHeight + 16) : 34
         Divider { visible: !ir.first }
         Text {
             anchors.left: parent.left
@@ -683,10 +719,12 @@ Scope {
             anchors.right: parent.right
             anchors.rightMargin: 12
             anchors.verticalCenter: parent.verticalCenter
+            id: irValue
             text: ir.value
             color: ir.valueColor
             font.pixelSize: 13
-            elide: Text.ElideMiddle
+            wrapMode: ir.wrap ? Text.WordWrap : Text.NoWrap
+            elide: ir.wrap ? Text.ElideNone : Text.ElideMiddle
         }
     }
 
@@ -1080,7 +1118,7 @@ Scope {
                         anchors.rightMargin: 18
                         spacing: 14
                         Image {
-                            source: Qt.resolvedUrl("assets/aequalyn-wordmark.svg")
+                            source: Qt.resolvedUrl(root.light ? "assets/aequalyn-wordmark-dark.svg" : "assets/aequalyn-wordmark.svg")
                             // drawn at the size it is shown, so it stays sharp when scaled up
                             sourceSize.height: Math.round(30 * scaler.s)
                             fillMode: Image.PreserveAspectFit
@@ -1104,13 +1142,17 @@ Scope {
                             spacing: 1
                             Layout.fillWidth: true
                             Text {
-                                text: root.stepNames[root.step]
+                                text: root.page === "install" ? root.stepNames[root.step]
+                                    : root.page === "repair" ? "Repair" : root.page === "manual" ? "Manual" : "Welcome"
                                 color: root.textPrimary
                                 font.pixelSize: 18
                                 font.weight: Font.DemiBold
                             }
                             Text {
-                                text: root.stepDescriptions[root.step]
+                                text: root.page === "install" ? root.stepDescriptions[root.step]
+                                    : root.page === "repair" ? "Fix an installed Aequalyn from the live system"
+                                    : root.page === "manual" ? "Aequalyn's README, as it ships on this ISO"
+                                    : "Install, repair, or read the manual first"
                                 color: root.textMuted
                                 font.pixelSize: 12
                                 elide: Text.ElideRight
@@ -1118,6 +1160,7 @@ Scope {
                             }
                         }
                         Text {
+                            visible: root.page === "install"
                             text: (root.step + 1) + " / " + root.stepNames.length
                             color: root.textMuted
                             font.pixelSize: 12
@@ -1149,6 +1192,7 @@ Scope {
                     Layout.preferredHeight: 0
                     implicitHeight: 0
                     clip: true
+                    visible: root.page === "install"
                     currentIndex: root.step
 
                     // 0 Welcome
@@ -1291,7 +1335,7 @@ Scope {
                         }
                         Group {
                             title: "Time zone"
-                            hint: "Drag to turn it, Ctrl + scroll to zoom, click a station to take its time zone."
+                            hint: "Drag to turn it, Ctrl + scroll to zoom, click a location to take its time zone."
                             fill: true
                             Layout.preferredWidth: 1
                             TimezoneGlobe {
@@ -1564,9 +1608,9 @@ Scope {
                             hint: "Its widgets from left to right; move them later on the Bar page of Settings."
                             Layout.preferredWidth: 1
                             Layout.alignment: Qt.AlignTop
-                            InfoRow { first: true; label: "Left"; value: root.barLeft.join(", ") }
-                            InfoRow { label: "Middle"; value: root.barCenter.join(", ") }
-                            InfoRow { label: "Right"; value: root.barRight.join(", ") }
+                            InfoRow { first: true; wrap: true; label: "Left"; value: root.barLeft.map(root.widgetName).join(", ") }
+                            InfoRow { wrap: true; label: "Middle"; value: root.barCenter.map(root.widgetName).join(", ") }
+                            InfoRow { wrap: true; label: "Right"; value: root.barRight.map(root.widgetName).join(", ") }
                         }
                     }
 
@@ -1829,8 +1873,224 @@ Scope {
                     }
                 }
 
+                // ---- the start page: install, repair or read the manual -----------------
+                Item {
+                    visible: root.page === ""
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.margins: 20
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: 0
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width, 1040)
+                        spacing: 26
+
+                        Text {
+                            text: "What would you like to do?"
+                            color: root.textPrimary
+                            font.pixelSize: 26
+                            font.weight: Font.DemiBold
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        RowLayout {
+                            spacing: 20
+                            Layout.fillWidth: true
+                            Repeater {
+                                model: [
+                                    { key: "install", glyph: "\u{F02CA}", title: "Install Aequalyn",
+                                      about: "Put Aequalyn on this computer: choose a disk, your account and your apps, review everything, then install." },
+                                    { key: "repair", glyph: "\u{F05B7}", title: "Repair an installation",
+                                      about: "Unlock and mount an Aequalyn already on a disk and enter it, to fix what keeps it from starting." },
+                                    { key: "manual", glyph: "\u{F0219}", title: "Read the manual",
+                                      about: "Aequalyn's README from this ISO: what it is, its desktop, its keys and its tools." }
+                                ]
+                                delegate: Rectangle {
+                                    id: card
+                                    required property var modelData
+                                    readonly property bool primary: modelData.key === "install"
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: 1
+                                    implicitHeight: 230
+                                    radius: 18
+                                    color: cardArea.containsMouse ? root.bgHover : root.bgCard
+                                    border.width: 1
+                                    border.color: cardArea.containsMouse || card.primary ? root.accent : root.border
+                                    scale: cardArea.pressed ? 0.98 : 1
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                    Behavior on scale { NumberAnimation { duration: 80 } }
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: card.modelData.title
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 22
+                                        spacing: 10
+                                        Rectangle {
+                                            implicitWidth: 52; implicitHeight: 52; radius: 14
+                                            color: card.primary ? root.accent : root.bgSelected
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: card.modelData.glyph
+                                                font.family: "JetBrainsMono Nerd Font"
+                                                font.pixelSize: 26
+                                                color: card.primary ? root.bgBase : root.accent
+                                            }
+                                        }
+                                        Text {
+                                            text: card.modelData.title
+                                            color: root.textPrimary
+                                            font.pixelSize: 18
+                                            font.weight: Font.DemiBold
+                                            Layout.topMargin: 6
+                                        }
+                                        Text {
+                                            text: card.modelData.about
+                                            color: root.textSecondary
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Item { Layout.fillHeight: true }
+                                    }
+                                    MouseArea {
+                                        id: cardArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.page = card.modelData.key
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.isRoot ? "" : "Not running as root: installing and repairing need it (start with sudo aequalyn-install)."
+                            visible: text !== ""
+                            color: root.warn
+                            font.pixelSize: 12
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                }
+
+                // ---- repair: the steps aequalyn-repair walks through, in a terminal -------
+                Item {
+                    visible: root.page === "repair"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.margins: 20
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: 0
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 20
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        spacing: 14
+                        Group {
+                            title: "What Repair does"
+                            hint: "It runs in a terminal, one question at a time, and changes nothing on its own: it opens your installed system for you to fix."
+                            InfoRow { first: true; label: "1  Disk"; value: "Choose the disk Aequalyn is installed on" }
+                            InfoRow { label: "2  Partition"; value: "Choose its system partition" }
+                            InfoRow { label: "3  Unlock"; value: "An encrypted (LUKS) partition asks for its passphrase" }
+                            InfoRow { label: "4  Mount"; value: "The system, its Btrfs subvolumes and /boot, under /mnt" }
+                            InfoRow { label: "5  Enter"; value: "arch-chroot into it, if you say so, to fix it from inside" }
+                        }
+                        RowLayout {
+                            spacing: 10
+                            Btn {
+                                text: "Start repair"
+                                primary: true
+                                enabled: root.isRoot
+                                onClicked: {
+                                    Quickshell.execDetached(["foot", "-T", "Aequalyn repair", "bash", root.installerDir + "/aequalyn-repair"]);
+                                    root.statusText = "Repair opened in a terminal.";
+                                }
+                            }
+                            Text {
+                                text: root.isRoot ? root.statusText : "Repair needs root: start the installer with sudo aequalyn-install."
+                                visible: text !== ""
+                                color: root.isRoot ? root.textMuted : root.warn
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        spacing: 14
+                        Group {
+                            title: "Once inside"
+                            hint: "Commands that fix most systems that will not start; type exit when you are done, and Repair unmounts everything."
+                            InfoRow { first: true; label: "Boot files"; value: "mkinitcpio -P"; valueColor: root.accent }
+                            InfoRow { label: "Updates"; value: "pacman -Syu"; valueColor: root.accent }
+                            InfoRow { label: "Password"; value: "passwd <user>"; valueColor: root.accent }
+                            InfoRow { label: "Leave"; value: "exit"; valueColor: root.accent }
+                        }
+                    }
+                }
+                }
+
+                // ---- the manual: the README that ships on the ISO --------------------------
+                Rectangle {
+                    id: manualPage
+                    visible: root.page === "manual"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.margins: 20
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: 0
+                    radius: 14
+                    color: root.bgCard
+                    border.width: 1
+                    border.color: root.border
+                    clip: true
+
+                    // read when the page is first shown
+                    property string markdown: ""
+                    FileView {
+                        id: manualFile
+                        path: root.page === "manual" || manualPage.markdown !== "" ? root.manualPath : ""
+                        printErrors: false
+                        // pictures are left out (drawn at their own size, wider than the page), and links
+                        // show as their words: Qt's Markdown draws links in a fixed dark blue
+                        onLoaded: manualPage.markdown = text().replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+                            .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+                        onLoadFailed: manualPage.markdown = "The manual (README.md) is not on this system."
+                    }
+                    Flickable {
+                        id: manualView
+                        anchors.fill: parent
+                        anchors.margins: 22
+                        contentWidth: width
+                        contentHeight: manualText.implicitHeight
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        Text {
+                            id: manualText
+                            width: manualView.width - 14
+                            text: manualPage.markdown
+                            textFormat: Text.MarkdownText
+                            wrapMode: Text.WordWrap
+                            color: root.textPrimary
+                            linkColor: root.accent
+                            font.pixelSize: 14
+                            onLinkActivated: link => Qt.openUrlExternally(link)
+                        }
+                    }
+                }
+
                 // ---- the steps, as they were ------------------------------------------------
                 Rectangle {
+                    visible: root.page === "install"
                     Layout.fillWidth: true
                     height: 116
                     color: root.bgCard
@@ -1912,6 +2172,7 @@ Scope {
 
                 // footer
                 Rectangle {
+                    visible: root.page !== ""
                     Layout.fillWidth: true
                     height: 64
                     color: "transparent"
@@ -1923,25 +2184,30 @@ Scope {
                         spacing: 12
                         BigButton {
                             text: "Back"
-                            enabled: root.step > 0 && !root.locked
-                            onClicked: root.step--
+                            visible: root.page !== ""
+                            enabled: !root.locked
+                            onClicked: {
+                                if (root.page === "install" && root.step > 0) { root.step--; return; }
+                                root.statusText = "";
+                                root.page = "";
+                            }
                         }
                         Text {
                             // why Next is unavailable, said in one line
                             text: root.stepHint
-                            visible: root.stepHint !== ""
+                            visible: root.page === "install" && root.stepHint !== ""
                             Layout.fillWidth: true
                             horizontalAlignment: Text.AlignHCenter
                             color: root.warn
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
                         }
-                        Item { Layout.fillWidth: true; visible: root.stepHint === "" }
+                        Item { Layout.fillWidth: true; visible: root.page !== "install" || root.stepHint === "" }
                         BigButton {
                             primary: true
                             Layout.preferredWidth: 170
                             text: "Next"
-                            visible: root.step < 6
+                            visible: root.page === "install" && root.step < 6
                             // a page with missing details can be entered, never passed:
                             // the wizard stops right where the next required input is
                             enabled: root.step < 6 && !root.locked && root.step < root.maxAllowedStep
@@ -1993,13 +2259,14 @@ Scope {
                     Layout.preferredHeight: Math.round(260 * parent.unit)
                     // room between the mark and the words, which sit lower
                     Layout.bottomMargin: Math.round(72 * parent.unit)
-                    source: Qt.resolvedUrl("assets/ae-mark.svg")
+                    source: Qt.resolvedUrl(root.light ? "assets/ae-mark-dark.svg" : "assets/ae-mark.svg")
                     sourceSize.width: Math.round(416 * parent.unit)
                     sourceSize.height: Math.round(260 * parent.unit)
                     fillMode: Image.PreserveAspectFit
                     smooth: true
                     mipmap: true
                     Accessible.name: "Aequalyn"
+
                 }
                 Text {
                     Layout.alignment: Qt.AlignHCenter

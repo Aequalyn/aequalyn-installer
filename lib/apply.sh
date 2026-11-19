@@ -72,9 +72,9 @@ BAR_OPACITY=${AEQUALYN_BAR_OPACITY:-100}
 # emits [aequalyn].bar_left/center/right as space-separated strings; the defaults
 # match the reference layout shipped in config/aequalyn/settings.json so older
 # install.toml files without these keys still install the intended positions.
-BAR_LEFT=${AEQUALYN_BAR_LEFT:-"appsmenu workspaces layouts network atelier"}
-BAR_CENTER=${AEQUALYN_BAR_CENTER:-"clock media title battery volume"}
-BAR_RIGHT=${AEQUALYN_BAR_RIGHT:-"brightness cpu bluetooth temperature caffeine tray screenrecorder screenshot power settingsbutton plume altscape"}
+BAR_LEFT=${AEQUALYN_BAR_LEFT:-"appsmenu workspaces"}
+BAR_CENTER=${AEQUALYN_BAR_CENTER:-"clock media"}
+BAR_RIGHT=${AEQUALYN_BAR_RIGHT:-"network bluetooth volume battery tray plume altscape settingsbutton power"}
 
 [[ $EUID -eq 0 ]] || abort "must run as root"
 # UEFI is the main target; legacy BIOS (VMs that default to it, such as GNOME
