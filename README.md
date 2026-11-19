@@ -22,13 +22,14 @@ assembles them). Everything works without AI.
 
 ## The flow, screen by screen
 
-Every screen, captured from a real session (`screenshots/`; the identity,
-timezone and disk values are representative).
+Every screen, rendered from the installer itself (`screenshots/`; the
+identity, timezone and disk values are representative).
 
 **1-2 · Welcome and Identity** -- the hardware proposal with the
 connectivity verdict and the import row; then hostname, user, keymap,
 password and the timezone globe: drag to rotate, click a station, and
-scroll the page straight through the globe (Ctrl + scroll zooms it).
+Ctrl + scroll to zoom it. Every screen fits the window as it is, with no
+scrolling: the whole installer scales to the size of the screen.
 
 | ![](screenshots/01-welcome.png) | ![](screenshots/02-identity.png) |
 
@@ -88,9 +89,8 @@ invite changes -- the invite itself lives in the `discordInvite` property in
 
 Connectivity is probed the way `lib/apply.sh` probes it (`ping -c 1 -W 2
 archlinux.org`); with no internet the proposed package source also defaults
-to the bundled offline repository. The globe on the Identity page takes a
-plain wheel as page scroll and zooms on Ctrl + wheel, so the whole page
-scrolls even with the cursor over it.
+to the bundled offline repository. The globe on the Identity page zooms on
+Ctrl + wheel and leaves a plain wheel alone.
 
 ## The qt5 dialog hook
 
