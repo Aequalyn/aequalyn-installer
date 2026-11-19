@@ -436,6 +436,24 @@ done
 (( AUR_BAKED )) && ok "staged Limine snapshot packages for the chroot" \
     || info "Limine snapshot packages will be built from AUR on first boot"
 
+# Aequalyn's own packages (packages/local.packages: mpvpaper, ddwriter, nudu) are
+# not in the Arch repositories: the ISO carries them prebuilt in its offline
+# repository, online installs included. Staged here, installed in the chroot.
+mkdir -p /mnt/var/cache/aequalyn-local
+LOCAL_STAGED=0
+if [[ -f "$AEQUALYN_ROOT/packages/local.packages" ]]; then
+    for p in $(sed -e 's/#.*//' "$AEQUALYN_ROOT/packages/local.packages"); do
+        f=$(compgen -G "$OFFLINE_REPO/$p-[0-9]*.pkg.tar.zst" | sort -V | tail -n1 || true)
+        if [[ -n "$f" ]]; then
+            cp -f "$f" /mnt/var/cache/aequalyn-local/
+            LOCAL_STAGED=$((LOCAL_STAGED + 1))
+        else
+            warn "$p is not in the offline repository; skipping it"
+        fi
+    done
+fi
+(( LOCAL_STAGED )) && ok "staged $LOCAL_STAGED of Aequalyn's own packages for the chroot"
+
 # ---------------------------------------------------------- chroot -----------
 info "configuring system in chroot ..."
 cat > /mnt/setup.sh <<'CHROOT'
@@ -615,6 +633,17 @@ fi
 if compgen -G '/var/cache/aequalyn-aur/*.pkg.tar.zst' >/dev/null; then
   pacman -U --noconfirm /var/cache/aequalyn-aur/*.pkg.tar.zst >/dev/null 2>&1 || true
 fi
+# Aequalyn's own packages (mpvpaper, ddwriter, nudu), one at a time so one that
+# cannot install does not keep the others out.
+for f in /var/cache/aequalyn-local/*.pkg.tar.zst; do
+  [[ -f "$f" ]] || continue
+  if pacman -U --noconfirm --needed "$f" >/dev/null 2>&1; then
+    ok "installed $(basename "$f" .pkg.tar.zst)"
+  else
+    warn "could not install $(basename "$f")"
+  fi
+done
+rm -rf /var/cache/aequalyn-local
 # Configure the tools after installing them so pacman cannot clobber the files.
 printf 'TARGET_OS_NAME="Aequalyn Linux"\nESP_PATH="/boot"\n' > /etc/default/limine
 if [[ -f /etc/limine-snapper-sync.conf ]]; then
