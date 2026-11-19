@@ -736,8 +736,17 @@ mkdir -p "/mnt/home/$USERNAME"
 AEQUALYN_SEED_WEBAPPS="$SEED_WEBAPPS" AEQUALYN_WEBAPP_BROWSER="$BROWSER" \
     bash "$AEQUALYN_ROOT/install.sh" --target "/mnt/home/$USERNAME" --owner "$UID_T:$GID_T"
 # install.sh sees the live-ISO mount path; rewrite it for the installed system.
-printf '/home/%s/Pictures/Wallpapers/beach.jpg' "$USERNAME" \
-    > "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
+# Start on the Aequalyn theme's night wallpaper when the tree ships it (it lands
+# in /usr/share/aequalyn just below), else on the sample one.
+if [[ -f "$AEQUALYN_ROOT/themes/aequalyn/backgrounds/1-night-aequalyn.jpg" ]]; then
+    printf '%s' /usr/share/aequalyn/themes/aequalyn/backgrounds/1-night-aequalyn.jpg
+else
+    printf '/home/%s/Pictures/Wallpapers/beach.jpg' "$USERNAME"
+fi > "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
+if [[ -f "$AEQUALYN_ROOT/themes/aequalyn/theme.json" ]]; then
+    printf 'theme:aequalyn' > "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
+    chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
+fi
 chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
 
 mkdir -p /mnt/usr/share/aequalyn /mnt/etc/aequalyn
