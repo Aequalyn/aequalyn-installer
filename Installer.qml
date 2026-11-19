@@ -2053,8 +2053,29 @@ Scope {
                     border.color: root.border
                     clip: true
 
-                    // read when the page is first shown
+                    // read when the page is first shown, then cut into blocks of a few paragraphs:
+                    // the whole README as one text is more than Qt's renderer can draw in one go,
+                    // and it crashed as soon as the page was scrolled
                     property string markdown: ""
+                    readonly property var blocks: {
+                        const out = [];
+                        let cur = "", fence = false;
+                        // paragraphs; a long list (no blank lines between its items) item by item
+                        const parts = [];
+                        for (const para of manualPage.markdown.split(/\n\s*\n/)) {
+                            if (para.length > 900 && !/^```/m.test(para)) parts.push(...para.split(/\n(?=\s{0,3}(?:[-*+]|\d+\.) )/));
+                            else parts.push(para);
+                        }
+                        for (const para of parts) {
+                            // a code block with blank lines in it stays in one piece
+                            const ticks = (para.match(/^```/gm) || []).length;
+                            cur += (cur === "" ? "" : "\n\n") + para;
+                            if (ticks % 2 === 1) fence = !fence;
+                            if (!fence && cur.length > 900) { out.push(cur); cur = ""; }
+                        }
+                        if (cur.trim() !== "") out.push(cur);
+                        return out;
+                    }
                     FileView {
                         id: manualFile
                         path: root.page === "manual" || manualPage.markdown !== "" ? root.manualPath : ""
@@ -2065,19 +2086,19 @@ Scope {
                             .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
                         onLoadFailed: manualPage.markdown = "The manual (README.md) is not on this system."
                     }
-                    Flickable {
+                    ListView {
                         id: manualView
                         anchors.fill: parent
                         anchors.margins: 22
-                        contentWidth: width
-                        contentHeight: manualText.implicitHeight
                         clip: true
+                        spacing: 10
                         boundsBehavior: Flickable.StopAtBounds
+                        model: manualPage.blocks
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                        Text {
-                            id: manualText
+                        delegate: Text {
+                            required property var modelData
                             width: manualView.width - 14
-                            text: manualPage.markdown
+                            text: modelData
                             textFormat: Text.MarkdownText
                             wrapMode: Text.WordWrap
                             color: root.textPrimary
