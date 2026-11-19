@@ -159,8 +159,10 @@ Scope {
     property bool rebooting: false
 
     // ---- install flow state -------------------------------------------------
-    // Once Install is pressed the wizard is committed: no Close installer any
-    // more, and the Finish page switches between running / succeeded / failed.
+    // Once Install is pressed the wizard is committed: the title bar's Close
+    // stays blocked while the apply runs (quitting would kill it halfway) and
+    // is re-activated by the outcome; the Finish page switches between
+    // running / succeeded / failed.
     property bool installStarted: false       // Install was pressed at least once
     property bool installFailed: false         // apply exited non-zero
     property bool finishAcknowledged: false    // Finish clicked -> Reboot Now / Debug / Retry
@@ -346,6 +348,11 @@ Scope {
         root.statusText = "Writing configuration...";
         root.writing = true;
         root.step = 6;
+        // writeProc closes its own stdin after writing (that is how tee gets
+        // EOF and exits), but that imperative "stdinEnabled = false" destroys
+        // the declared binding: re-arm it here or a Retry would start tee
+        // with no stdin at all and hang the wizard on "Writing..." forever.
+        writeProc.stdinEnabled = true;
         writeProc.running = true;
     }
 
@@ -608,6 +615,9 @@ Scope {
 
     function startDebug() {
         root.statusText = "Preparing the AI debug session...";
+        // same re-arm as in startApply(): debugSkillProc closes its own stdin
+        // after writing, so a second Debug click needs it enabled again
+        debugSkillProc.stdinEnabled = true;
         debugSkillProc.running = true;
     }
 
@@ -1168,13 +1178,19 @@ Scope {
                         Rectangle {
                             implicitWidth: 30; implicitHeight: 30; radius: 8
                             color: closeArea.containsMouse ? root.bgHover : "transparent"
+                            // dimmed like the step bar while an install is in flight
+                            opacity: closeArea.enabled ? 1.0 : 0.4
                             Text { anchors.centerIn: parent; text: "✕"; color: root.textSecondary; font.pixelSize: 14 }
                             MouseArea {
                                 id: closeArea
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: Qt.quit()
+                                // quitting mid-install would kill the apply halfway
+                                // through the disk; success or failure re-activate it
+                                enabled: !(root.writing || root.applying)
+                                // belt and braces: never quit while a process runs
+                                onClicked: if (!(root.writing || root.applying)) Qt.quit()
                             }
                         }
                     }
@@ -1687,9 +1703,10 @@ Scope {
 
                     // 6 Finish: progress while installing, then a staged end -- Finish
                     // acknowledges the outcome, and Reboot Now (success) or Debug /
-                    // Retry (failure) follow it. There is no Close installer once Install
-                    // has been pressed: quitting mid-install would kill the apply, and
-                    // after it there is nothing left to decide but reboot, retry or debug.
+                    // Retry (failure) follow it. The Close ✕ is blocked only while
+                    // the apply runs -- quitting mid-install would kill it -- and
+                    // comes back with the outcome, when there is nothing left to
+                    // decide but reboot, retry or debug.
                     // After a failure the help sits beside the log, so nothing scrolls.
                     ColumnLayout {
                         spacing: 12

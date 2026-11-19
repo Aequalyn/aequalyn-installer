@@ -3,12 +3,23 @@
 #
 # Interactive runs use the Quickshell-based UI in this directory. The legacy
 # command-line flags are delegated to aequalyn-install-cli for unattended,
-# repair and detection workflows.
+# repair and detection workflows; --test runs the scripted UI self-test in
+# tests/ against mock scripts, so nothing touches a disk.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AEQUALYN_INSTALLER_DIR="$SELF_DIR"
 export AEQUALYN_INSTALLER_DIR
+
+# Scripted UI self-test: mock detect/apply, a window that pops up and drives
+# itself through Install -> Failure -> Retry -> Success. See tests/e2e.sh.
+for arg in "$@"; do
+    case "$arg" in
+        --test)
+            exec bash "$SELF_DIR/tests/e2e.sh"
+            ;;
+    esac
+done
 
 # Delegate non-interactive / special modes to the CLI backend.
 for arg in "$@"; do
