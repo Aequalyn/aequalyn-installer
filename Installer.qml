@@ -8,19 +8,19 @@ import QtQuick.Layouts
 Scope {
     id: root
 
-    // ---- theme (Aequalyn control-center palette) ----------------------------
-    readonly property color bgBase: "#1a1b26"
-    readonly property color bgCard: "#24283b"
-    readonly property color bgSurface: "#24283b"
-    readonly property color bgHover: "#1e2235"
-    readonly property color bgSelected: "#283457"
-    readonly property color border: "#32364a"
-    readonly property color textPrimary: "#c0caf5"
-    readonly property color textSecondary: "#a9b1d6"
-    readonly property color textMuted: "#565f89"
-    readonly property color accent: "#7aa2f7"
-    readonly property color ok: "#9ece6a"
-    readonly property color warn: "#f7768e"
+    // ---- colours: the Aequalyn palette the control center opens with (Basalt) ------
+    readonly property color bgBase: "#121515"
+    readonly property color bgCard: "#1a1f1f"
+    readonly property color bgSurface: "#1a1f1f"
+    readonly property color bgHover: "#202727"
+    readonly property color bgSelected: "#26383a"
+    readonly property color border: "#2f3a3a"
+    readonly property color textPrimary: "#dde5e3"
+    readonly property color textSecondary: "#b2bfbc"
+    readonly property color textMuted: "#6c7a78"
+    readonly property color accent: "#4fc1b0"
+    readonly property color ok: "#8bc79a"
+    readonly property color warn: "#e06c6c"
 
     property string installerDir: Quickshell.env("AEQUALYN_INSTALLER_DIR") || "/opt/aequalyn/installer"
     property string detectScript: root.installerDir + "/aequalyn-detect"
@@ -356,7 +356,8 @@ Scope {
     Process {
         id: lsblkProc
         running: false
-        command: ["lsblk", "-dpno", "NAME,SIZE,MODEL"]
+        // only disks: not the DVD drive (rom), nor the RAM ones (zram swap, loop images)
+        command: ["lsblk", "-dpno", "NAME,TYPE,SIZE,MODEL"]
         stdout: StdioCollector {
             onStreamFinished: {
                 const lines = (text || "").trim().split("\n");
@@ -367,7 +368,8 @@ Scope {
                     const parts = line.split(/\s+/);
                     const name = parts[0];
                     if (name === root.detect.boot_disk) continue;
-                    out.push({ name: name, size: parts[1] || "", model: parts.slice(2).join(" "), label: name + "  " + (parts[1] || "") + "  " + parts.slice(2).join(" ") });
+                    if (parts[1] !== "disk" || /^\/dev\/(zram|loop)/.test(name)) continue;
+                    out.push({ name: name, size: parts[2] || "", model: parts.slice(3).join(" "), label: name + "  " + (parts[2] || "") + "  " + parts.slice(3).join(" ") });
                 }
                 root.disks = out;
                 if (!root.selectedDisk && out.length > 0) root.selectedDisk = out[0].name;
@@ -595,11 +597,306 @@ Scope {
         }
     }
 
-    // ---- UI helpers ---------------------------------------------------------
-    component FieldLabel: Text {
-        color: root.textMuted
-        font.pixelSize: 13
-        font.weight: Font.DemiBold
+    // ---- UI parts: the control center's, drawn here ------------------------
+    // A group of settings: a short title, a hint, then its rows in one rounded box with
+    // a hairline between them (`boxed: false` for content that brings its own frame).
+    component Group: ColumnLayout {
+        id: g
+        property string title: ""
+        property string hint: ""
+        property bool boxed: true
+        property bool fill: false
+        default property alias body: inner.data
+        spacing: 6
+        Layout.fillWidth: true
+        Layout.fillHeight: g.fill
+        Text {
+            visible: g.title !== ""
+            text: g.title
+            color: root.textSecondary
+            font.pixelSize: 13
+            font.weight: Font.DemiBold
+            Layout.leftMargin: 2
+        }
+        Text {
+            visible: g.hint !== ""
+            text: g.hint
+            color: root.textMuted
+            font.pixelSize: 12
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            Layout.leftMargin: 2
+        }
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: g.fill
+            implicitHeight: inner.implicitHeight + (g.boxed ? 8 : 0)
+            radius: 12
+            color: g.boxed ? root.bgSurface : "transparent"
+            border.width: g.boxed ? 1 : 0
+            border.color: root.border
+            ColumnLayout {
+                id: inner
+                x: g.boxed ? 4 : 0
+                y: g.boxed ? 4 : 0
+                width: parent.width - (g.boxed ? 8 : 0)
+                height: g.fill ? parent.height - (g.boxed ? 8 : 0) : implicitHeight
+                spacing: 0
+            }
+        }
+    }
+
+    // the hairline over every row but a group's first
+    component Divider: Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: 12
+        anchors.rightMargin: 12
+        height: 1
+        color: root.border
+    }
+
+    // a fact: its name on the left, its value on the right
+    component InfoRow: Item {
+        id: ir
+        property string label: ""
+        property string value: ""
+        property bool first: false
+        property color valueColor: root.textPrimary
+        Layout.fillWidth: true
+        implicitHeight: 34
+        Divider { visible: !ir.first }
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            width: 128
+            text: ir.label
+            color: root.textMuted
+            font.pixelSize: 13
+            elide: Text.ElideRight
+        }
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 148
+            anchors.right: parent.right
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: ir.value
+            color: ir.valueColor
+            font.pixelSize: 13
+            elide: Text.ElideMiddle
+        }
+    }
+
+    // a line to type in, framed as the control center's fields are
+    component Field: Rectangle {
+        id: fd
+        property alias text: input.text
+        property alias echoMode: input.echoMode
+        property alias validator: input.validator
+        property alias input: input
+        property string placeholder: ""
+        property bool mono: false
+        signal edited(string text)
+        Layout.fillWidth: true
+        implicitHeight: 34
+        radius: 8
+        color: root.bgBase
+        border.width: 1
+        border.color: input.activeFocus ? root.accent : root.border
+        opacity: enabled ? 1 : 0.5
+        TextInput {
+            id: input
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            verticalAlignment: TextInput.AlignVCenter
+            color: root.textPrimary
+            selectionColor: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.35)
+            font.pixelSize: 13
+            font.family: fd.mono ? "monospace" : Qt.application.font.family
+            clip: true
+            enabled: !root.locked
+            onTextEdited: fd.edited(text)
+            Text {
+                anchors.fill: parent
+                verticalAlignment: Text.AlignVCenter
+                visible: input.text === "" && !input.activeFocus
+                text: fd.placeholder
+                color: root.textMuted
+                font: input.font
+            }
+        }
+    }
+
+    // a field in a row: its name on the left, the field on the right
+    component FieldRow: Item {
+        id: fr
+        property string label: ""
+        property bool first: false
+        default property alias field: slot.data
+        Layout.fillWidth: true
+        implicitHeight: 46
+        Divider { visible: !fr.first }
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            width: 128
+            text: fr.label
+            color: root.textSecondary
+            font.pixelSize: 13
+            elide: Text.ElideRight
+        }
+        RowLayout {
+            id: slot
+            anchors.left: parent.left
+            anchors.leftMargin: 148
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+        }
+    }
+
+    // the control center's switch
+    component Switch: Rectangle {
+        id: sw
+        property bool checked: false
+        signal toggled(bool value)
+        implicitWidth: 44
+        implicitHeight: 26
+        radius: 13
+        color: checked ? root.accent : root.bgSelected
+        opacity: enabled ? 1 : 0.4
+        Behavior on color { ColorAnimation { duration: 140 } }
+        Rectangle {
+            width: 18; height: 18; radius: 9
+            y: 4
+            x: sw.checked ? sw.width - width - 4 : 4
+            color: sw.checked ? root.bgBase : root.textMuted
+            Behavior on x { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        }
+        MouseArea {
+            anchors.fill: parent
+            enabled: sw.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: sw.toggled(!sw.checked)
+        }
+    }
+
+    // something on or off: a title, what it does, and a switch
+    component ToggleRow: Item {
+        id: tr
+        property string title: ""
+        property string sub: ""
+        property bool checked: false
+        property bool first: false
+        signal toggled(bool value)
+        Layout.fillWidth: true
+        implicitHeight: tr.sub !== "" ? 52 : 40
+        Divider { visible: !tr.first }
+        ColumnLayout {
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.right: trSwitch.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 1
+            Text { text: tr.title; color: root.textPrimary; font.pixelSize: 13; Layout.fillWidth: true; elide: Text.ElideRight }
+            Text { visible: tr.sub !== ""; text: tr.sub; color: root.textMuted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+        }
+        Switch {
+            id: trSwitch
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            checked: tr.checked
+            enabled: !root.locked
+            onToggled: v => tr.toggled(v)
+        }
+        MouseArea {
+            anchors.fill: parent
+            anchors.rightMargin: 64
+            enabled: !root.locked
+            cursorShape: Qt.PointingHandCursor
+            onClicked: tr.toggled(!tr.checked)
+        }
+    }
+
+    // one of a few: chips, as the control center's choices
+    component Chips: Flow {
+        id: ch
+        property var options: []          // [{ key, label }]
+        property string current: ""
+        signal chosen(string key)
+        Layout.fillWidth: true
+        spacing: 6
+        Repeater {
+            model: ch.options
+            delegate: Rectangle {
+                id: chip
+                required property var modelData
+                readonly property bool on: ch.current === modelData.key
+                width: chipText.implicitWidth + 24
+                height: 32
+                radius: 8
+                color: on ? root.bgSelected : chipArea.containsMouse ? root.bgHover : root.bgSurface
+                border.width: 1
+                border.color: on ? root.accent : root.border
+                opacity: root.locked ? 0.5 : 1
+                Text {
+                    id: chipText
+                    anchors.centerIn: parent
+                    text: chip.modelData.label
+                    color: chip.on ? root.accent : root.textSecondary
+                    font.pixelSize: 12
+                    font.weight: chip.on ? Font.DemiBold : Font.Normal
+                }
+                MouseArea {
+                    id: chipArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: !root.locked
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: ch.chosen(chip.modelData.key)
+                }
+            }
+        }
+    }
+
+    // a button: the main one filled with the accent, the others quiet
+    component Btn: Rectangle {
+        id: bt
+        property string text: ""
+        property bool primary: false
+        signal clicked()
+        implicitWidth: btText.implicitWidth + 28
+        implicitHeight: 34
+        radius: 8
+        color: !enabled ? root.bgHover : bt.primary ? (btArea.containsMouse ? Qt.lighter(root.accent, 1.1) : root.accent)
+             : btArea.containsMouse ? root.bgHover : root.bgSurface
+        border.width: bt.primary ? 0 : 1
+        border.color: root.border
+        opacity: enabled ? 1 : 0.6
+        Text {
+            id: btText
+            anchors.centerIn: parent
+            text: bt.text
+            color: bt.primary && bt.enabled ? root.bgBase : root.textPrimary
+            font.pixelSize: 13
+            font.weight: bt.primary ? Font.DemiBold : Font.Normal
+        }
+        MouseArea {
+            id: btArea
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: bt.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: bt.clicked()
+        }
     }
 
     // Auto-following, virtualised log view. Used by the Finish page.
@@ -613,7 +910,7 @@ Scope {
         ListView {
             id: logView
             anchors.fill: parent
-            anchors.margins: 8
+            anchors.margins: 10
             clip: true
             model: logModel
             boundsBehavior: Flickable.StopAtBounds
@@ -622,7 +919,7 @@ Scope {
                 required property string line
                 width: logView.width
                 text: line
-                color: root.textMuted
+                color: root.textSecondary
                 font.family: "monospace"
                 font.pixelSize: 11
                 wrapMode: Text.WrapAnywhere
@@ -639,38 +936,15 @@ Scope {
         }
     }
 
-    component TextFieldStyled: TextField {
-        enabled: !root.locked
-        color: root.textPrimary
-        font.pixelSize: 16
-        implicitHeight: 44
-        Layout.maximumWidth: 560
-        background: Rectangle {
-            color: root.bgSurface
-            radius: 12
-            border.color: parent.activeFocus ? root.accent : root.border
-            border.width: parent.activeFocus ? 2 : 1
-        }
-    }
+    // ways of installing, in words
+    readonly property var modeOptions: [
+        { key: "fullwipe", label: "Whole disk", about: "Erases the disk you chose and installs Aequalyn as its only system." },
+        { key: "dualboot", label: "Next to Windows", about: "Keeps Windows and installs Aequalyn in the free space beside it." },
+        { key: "manual", label: "Manual", about: "Uses the partitions you prepared yourself; nothing else is changed." }
+    ]
+    function modeLabel(m) { const o = root.modeOptions.find(x => x.key === m); return o ? o.label : m; }
+    function cap(s) { s = String(s || ""); return s.charAt(0).toUpperCase() + s.slice(1); }
 
-    component ComboBoxStyled: ComboBox {
-        enabled: !root.locked
-        implicitHeight: 44
-        Layout.maximumWidth: 560
-        background: Rectangle {
-            color: root.bgSurface
-            radius: 12
-            border.color: parent.activeFocus ? root.accent : root.border
-            border.width: 1
-        }
-        contentItem: Text {
-            text: parent.displayText
-            color: root.textPrimary
-            font.pixelSize: 16
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: 12
-        }
-    }
 
     // Every action in the wizard: 52 px tall, 16 pt demi-bold, with its own
     // hover and press states. `primary` picks the accent-filled variant used
@@ -765,777 +1039,917 @@ Scope {
         visible: true
         Component.onDestruction: root.saveGeom()
         color: root.bgBase
-        implicitWidth: 800
-        implicitHeight: 700
+        implicitWidth: 1280
+        implicitHeight: 760
         maximumSize: Qt.size(10000, 10000)
         minimumSize: Qt.size(400, 300)
 
         Rectangle {
+            id: frame
             anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: "#1a1b26" }
-                GradientStop { position: 1.0; color: "#24283b" }
-            }
+            color: root.bgBase
             radius: 20
             border.color: root.border
             border.width: 1
             clip: true
+
+            // The whole installer is laid out for a 1336 x 728 window (a 1366 x 768 screen)
+            // and scaled as one to fill whatever window it gets: larger on a larger screen,
+            // a little smaller on a smaller one, the same proportions everywhere.
+            Item {
+                id: scaler
+                readonly property real s: Math.max(0.7, Math.min(3, Math.min(frame.width / 1336, frame.height / 728)))
+                width: frame.width / s
+                height: frame.height / s
+                scale: s
+                transformOrigin: Item.TopLeft
 
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 0
                 spacing: 0
 
-                // main
-                ColumnLayout {
+                // ---- the title bar: the name, then the step --------------------------
+                Rectangle {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    spacing: 0
-
-                    // title bar
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 68
-                        color: "transparent"
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 20
-                            anchors.rightMargin: 18
-                            spacing: 8
-                            Rectangle {
-                                width: 30; height: 30; radius: 9
-                                color: root.accent
-                                Text { anchors.centerIn: parent; text: "æ"; color: root.bgBase; font.pixelSize: 16; font.bold: true }
-                            }
-                            ColumnLayout {
-                                spacing: 0
-                                Text { text: "Aequalyn"; color: root.textPrimary; font.pixelSize: 15; font.weight: Font.DemiBold }
-                                Text { text: "Installer"; color: root.textMuted; font.pixelSize: 10 }
-                            }
-                            Rectangle { width: 1; height: 28; color: root.border }
+                    implicitHeight: 64
+                    color: "transparent"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 22
+                        anchors.rightMargin: 18
+                        spacing: 14
+                        Image {
+                            source: Qt.resolvedUrl("assets/aequalyn-wordmark.svg")
+                            // drawn at the size it is shown, so it stays sharp when scaled up
+                            sourceSize.height: Math.round(30 * scaler.s)
+                            fillMode: Image.PreserveAspectFit
+                            // its box kept to the wordmark's own proportions (728 x 179), not
+                            // to the size it is drawn at, so the gap after it stays the same
+                            Layout.preferredHeight: 30
+                            Layout.preferredWidth: Math.round(30 * 728 / 179)
+                            Layout.alignment: Qt.AlignVCenter
+                            Accessible.name: "Aequalyn"
+                        }
+                        Text {
+                            text: "Installer"
+                            color: root.accent
+                            font.pixelSize: 16
+                            font.weight: Font.DemiBold
+                            Layout.alignment: Qt.AlignVCenter
+                            Layout.topMargin: 3
+                        }
+                        Rectangle { implicitWidth: 1; implicitHeight: 30; color: root.border; Layout.leftMargin: 6; Layout.rightMargin: 6 }
+                        ColumnLayout {
+                            spacing: 1
+                            Layout.fillWidth: true
                             Text {
                                 text: root.stepNames[root.step]
                                 color: root.textPrimary
-                                font.pixelSize: 20
+                                font.pixelSize: 18
                                 font.weight: Font.DemiBold
                             }
-                            Item { Layout.fillWidth: true }
                             Text {
-                                text: (root.step + 1) + " / " + root.stepNames.length
+                                text: root.stepDescriptions[root.step]
                                 color: root.textMuted
                                 font.pixelSize: 12
-                            }
-                            Rectangle {
-                                width: 30; height: 30; radius: 9
-                                color: closeArea.containsMouse ? root.bgHover : "transparent"
-                                Text { anchors.centerIn: parent; text: "✕"; color: root.textSecondary; font.pixelSize: 14 }
-                                MouseArea {
-                                    id: closeArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: Qt.quit()
-                                }
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
                             }
                         }
+                        Text {
+                            text: (root.step + 1) + " / " + root.stepNames.length
+                            color: root.textMuted
+                            font.pixelSize: 12
+                        }
                         Rectangle {
-                            anchors.bottom: parent.bottom
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            height: 1
-                            color: root.border
+                            implicitWidth: 30; implicitHeight: 30; radius: 8
+                            color: closeArea.containsMouse ? root.bgHover : "transparent"
+                            Text { anchors.centerIn: parent; text: "✕"; color: root.textSecondary; font.pixelSize: 14 }
+                            MouseArea {
+                                id: closeArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: Qt.quit()
+                            }
+                        }
+                    }
+                    Rectangle { anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
+                }
+
+                // ---- the panel: everything of a step, side by side, no scrolling -------
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.margins: 20
+                    // the panel takes the room between the title bar and the steps, never
+                    // more: the steps and the buttons under it stay where they are
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: 0
+                    implicitHeight: 0
+                    clip: true
+                    currentIndex: root.step
+
+                    // 0 Welcome
+                    RowLayout {
+                        spacing: 20
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 14
+                            Group {
+                                title: "Your computer"
+                                hint: root.detecting ? "Looking at your hardware…" : "What the installer found. Everything it proposes can be changed in the next steps."
+                                InfoRow { first: true; label: "Firmware"; value: String(root.detect.firmware || "—").toUpperCase() }
+                                InfoRow { label: "Processor"; value: ({ GenuineIntel: "Intel", AuthenticAMD: "AMD" })[root.detect.cpu_vendor] || root.detect.cpu_vendor || "—"; }
+                                InfoRow { label: "Graphics"; value: String(root.detect.gpu_vendors || "—").split(",").map(root.cap).join(", ") }
+                                InfoRow { label: "Memory"; value: (root.detect.mem_gb || "?") + " GiB" }
+                                InfoRow { label: "Battery"; value: root.detect.battery === "yes" ? "Yes, a laptop" : (root.detect.battery || "—") }
+                                InfoRow { label: "Disks"; value: (root.detect.disk_count || 0) + "  ·  first " + (root.detect.first_disk || "none") + (root.detect.free_gb !== undefined ? "  ·  " + root.detect.free_gb + " GB unpartitioned" : "") }
+                                InfoRow { label: "Windows"; value: root.detect.win_efi ? "Found on " + root.detect.win_efi : "Not found" }
+                                InfoRow {
+                                    label: "Internet"
+                                    value: root.netChecking ? "Checking…" : (root.online ? "Connected: online installs available" : "Not connected: the offline install is proposed")
+                                    valueColor: !root.netChecking && !root.online ? root.warn : root.textPrimary
+                                }
+                            }
+                            RowLayout {
+                                spacing: 10
+                                Btn {
+                                    text: root.detecting ? "Looking…" : "Look again"
+                                    enabled: !root.locked && !root.detecting
+                                    onClicked: {
+                                        root.detecting = true;
+                                        detectProc.running = true;
+                                        lsblkProc.running = true;
+                                        root.netChecking = true;
+                                        netProc.running = true;
+                                    }
+                                }
+                                Text {
+                                    text: root.statusText
+                                    visible: root.statusText !== ""
+                                    color: root.warn
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            Text {
+                                text: "No internet connection: the bundled offline repository is proposed, and Online as a package source could not download anything."
+                                color: root.warn
+                                visible: !root.netChecking && !root.online
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 2
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 14
+                            Group {
+                                title: "What it proposes"
+                                InfoRow { first: true; label: "Profiles"; value: (root.detect.profiles || ["minimal"]).map(root.cap).join(", ") }
+                                InfoRow { label: "Install"; value: root.modeLabel(root.detect.mode || "fullwipe") }
+                                InfoRow { label: "Encryption"; value: root.detect.encrypt === true ? "On (LUKS2)" : "Off" }
+                            }
+                            Group {
+                                title: "Your choices, in one file"
+                                hint: "Every step writes into install.toml. You see it on Review, and nothing is installed until you approve it there."
+                                InfoRow { first: true; label: "Written to"; value: root.configPath; valueColor: root.accent }
+                            }
+                            Group {
+                                title: "Or start from a saved install.toml"
+                                hint: "A file from an earlier install fills in every step: you review it and type a password."
+                                FieldRow {
+                                    first: true
+                                    label: "File"
+                                    Field {
+                                        id: importPathField
+                                        mono: true
+                                        placeholder: "/path/to/install.toml"
+                                    }
+                                    Btn {
+                                        text: "Load"
+                                        enabled: !root.locked
+                                        onClicked: {
+                                            if (importPathField.text.trim() === "") { root.statusText = "Enter a path to install.toml"; return; }
+                                            importProc.path = importPathField.text.trim();
+                                            importProc.running = true;
+                                        }
+                                    }
+                                    Btn {
+                                        text: "Browse"
+                                        primary: true
+                                        enabled: !root.locked
+                                        onClicked: zenityProc.running = true
+                                    }
+                                }
+                            }
+                            Text {
+                                visible: root.imported
+                                text: "Imported config loaded. Review and apply."
+                                color: root.ok
+                                font.pixelSize: 12
+                            }
                         }
                     }
 
-                    // content
-                    StackLayout {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        implicitHeight: 0
-                        currentIndex: root.step
+                    // 1 Identity
+                    RowLayout {
+                        spacing: 20
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 14
+                            Group {
+                                title: "This computer, and you"
+                                hint: "Its name on the network, your account, and the keyboard layout of the text console."
+                                FieldRow { first: true; label: "Computer name"; Field { text: root.hostname; placeholder: "aequalyn"; onEdited: t => root.hostname = t } }
+                                FieldRow { label: "Your username"; Field { text: root.username; placeholder: "user"; onEdited: t => root.username = t } }
+                                FieldRow { label: "Console keymap"; Field { text: root.keymap; mono: true; placeholder: "us, uk, de…"; onEdited: t => root.keymap = t } }
+                            }
+                            Group {
+                                title: "Password"
+                                hint: "For your account and for root; it unlocks the disk too when encryption is on."
+                                FieldRow { first: true; label: "Password"; Field { echoMode: TextInput.Password; text: root.password; onEdited: t => root.password = t } }
+                                FieldRow { label: "Again"; Field { echoMode: TextInput.Password; text: root.passwordConfirm; onEdited: t => root.passwordConfirm = t } }
+                            }
+                            Text {
+                                text: root.password === "" ? "The password can't be empty." :
+                                      (root.password !== root.passwordConfirm ? "The two passwords don't match." : "✓  The passwords match.")
+                                color: (root.password === "" || root.password !== root.passwordConfirm) ? root.warn : root.ok
+                                font.pixelSize: 12
+                                Layout.leftMargin: 2
+                            }
+                        }
+                        Group {
+                            title: "Time zone"
+                            hint: "Drag to turn it, Ctrl + scroll to zoom, click a station to take its time zone."
+                            fill: true
+                            Layout.preferredWidth: 1
+                            TimezoneGlobe {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                // as tall as the panel leaves it, never taller
+                                Layout.preferredHeight: 160
+                                Layout.minimumHeight: 120
+                                Layout.margins: 4
+                                selectedTimezone: root.timezone
+                                onTimezoneSelected: (tz) => root.timezone = tz
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.margins: 8
+                                spacing: 10
+                                Text { text: root.timezone; color: root.accent; font.pixelSize: 14; font.weight: Font.DemiBold; Layout.fillWidth: true; elide: Text.ElideRight }
+                                Btn { text: "Use this computer's"; enabled: !root.locked; onClicked: tzProc.running = true }
+                            }
+                        }
+                    }
 
-                        // 0 Welcome
-                        Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                anchors.fill: parent
-                                anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.rightMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.topMargin: 16
-                                anchors.bottomMargin: 16
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 8
-                                    Text { text: "Hardware detection"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
-                                    Text { text: root.detecting ? "Detecting your system..." : "Review the proposal below. You can adjust everything later."; color: root.textMuted; font.pixelSize: 13; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        radius: 12
-                                        color: root.bgSurface
-                                        border.color: root.border
-                                        implicitHeight: infoCol.implicitHeight + 20
-                                        ColumnLayout {
-                                            id: infoCol
-                                            anchors.fill: parent
-                                            anchors.margins: 10
-                                            spacing: 6
-                                            Text { text: "What is install.toml?"; color: root.textPrimary; font.pixelSize: 13; font.weight: Font.DemiBold }
-                                            Text { text: "install.toml is the single configuration contract for the whole install: identity, disk, packages and Aequalyn defaults. The wizard writes it, shows it to you for review, and applies it only after you approve. Re-running with --config install.toml reproduces the same install deterministically."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                            Text { text: "Where is it?"; color: root.textPrimary; font.pixelSize: 13; font.weight: Font.DemiBold }
-                                            Text { text: "It will be written to: " + root.configPath; color: root.accent; font.pixelSize: 12; font.family: "monospace"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                            Text { text: "You can edit it by hand before applying, or pass an existing file with aequalyn-install --config FILE."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        radius: 14
-                                        color: root.bgSurface
-                                        border.color: root.border
-                                        implicitHeight: grid.implicitHeight + 24
-                                        GridLayout {
-                                            id: grid
-                                            anchors.fill: parent
-                                            anchors.margins: 12
-                                            columns: 2
-                                            columnSpacing: 16
-                                            rowSpacing: 8
-                                            property var rows: [
-                                                ["Firmware", (root.detect.firmware || "—")],
-                                                ["CPU", (root.detect.cpu_vendor || "—") + "  (" + (root.detect.cpus || "?") + " threads)"],
-                                                ["GPU", (root.detect.gpu_vendors || "—")],
-                                                ["Memory", (root.detect.mem_gb || "?") + " GiB"],
-                                                ["Laptop battery", (root.detect.battery || "—")],
-                                                ["Disks", (root.detect.disk_count || 0) + "  (first: " + (root.detect.first_disk || "none") + ")"],
-                                                ["Windows EFI", (root.detect.win_efi || "not found")],
-                                                ["Internet", root.netChecking ? "checking..."
-                                                     : (root.online ? "connected — online installs available"
-                                                        : "not connected — offline install proposed")],
-                                                ["Proposed profiles", (root.detect.profiles || []).join(", ")],
-                                                ["Proposed mode", (root.detect.mode || "—") + "   encrypt: " + (root.detect.encrypt === true)]
-                                            ]
-                                            Repeater {
-                                                model: grid.rows
-                                                delegate: RowLayout {
-                                                    required property var modelData
-                                                    Layout.columnSpan: 2
-                                                    Layout.fillWidth: true
-                                                    Text { text: modelData[0]; color: root.textMuted; font.pixelSize: 13; Layout.preferredWidth: 150 }
-                                                    Text { text: modelData[1]; color: root.textPrimary; font.pixelSize: 13; Layout.fillWidth: true; wrapMode: Text.WordWrap }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    BigButton {
-                                        text: "Re-detect"
-                                        enabled: !root.locked
-                                        onClicked: {
-                                            root.detecting = true;
-                                            detectProc.running = true;
-                                            lsblkProc.running = true;
-                                            root.netChecking = true;
-                                            netProc.running = true;
-                                        }
-                                    }
-                                    Text {
-                                        text: "No internet connection detected: the bundled offline repository is proposed, and Online as a package source would not be able to download anything."
-                                        color: root.warn
-                                        visible: !root.netChecking && !root.online
-                                        font.pixelSize: 12
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
+                    // 2 Disk
+                    RowLayout {
+                        spacing: 20
+                        Group {
+                            title: "Install on"
+                            hint: "The disk Aequalyn goes on. The live USB you started from isn't listed."
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            Repeater {
+                                model: root.disks
+                                delegate: Rectangle {
+                                    id: diskRow
+                                    required property var modelData
+                                    required property int index
+                                    readonly property bool on: root.selectedDisk === modelData.name
+                                    Layout.fillWidth: true
+                                    implicitHeight: 56
+                                    radius: 8
+                                    color: on ? root.bgSelected : diskArea.containsMouse ? root.bgHover : "transparent"
+                                    border.width: on ? 1 : 0
+                                    border.color: root.accent
+                                    Divider { visible: diskRow.index > 0 && !diskRow.on }
                                     RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 8
-                                        TextFieldStyled {
-                                            id: importPathField
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 12
+                                        anchors.rightMargin: 12
+                                        spacing: 12
+                                        Rectangle {
+                                            implicitWidth: 18; implicitHeight: 18; radius: 9
+                                            color: "transparent"
+                                            border.width: 2
+                                            border.color: diskRow.on ? root.accent : root.textMuted
+                                            Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 4; color: root.accent; visible: diskRow.on }
+                                        }
+                                        ColumnLayout {
+                                            spacing: 1
                                             Layout.fillWidth: true
-                                            placeholderText: "/path/to/install.toml"
+                                            Text { text: diskRow.modelData.model || "Disk"; color: root.textPrimary; font.pixelSize: 13; font.weight: diskRow.on ? Font.DemiBold : Font.Normal; elide: Text.ElideRight; Layout.fillWidth: true }
+                                            Text { text: diskRow.modelData.name; color: root.textMuted; font.pixelSize: 11; font.family: "monospace" }
                                         }
-                                        BigButton {
-                                            text: "Load"
-                                            enabled: !root.locked
-                                            onClicked: {
-                                                if (importPathField.text.trim() === "") { root.statusText = "Enter a path to install.toml"; return; }
-                                                importProc.path = importPathField.text.trim();
-                                                importProc.running = true;
-                                            }
-                                        }
-                                        BigButton {
-                                            text: "Browse"
-                                            primary: true
-                                            enabled: !root.locked
-                                            onClicked: zenityProc.running = true
-                                        }
+                                        Text { text: diskRow.modelData.size; color: diskRow.on ? root.accent : root.textSecondary; font.pixelSize: 14; font.weight: Font.DemiBold }
                                     }
-                                    Text { text: root.imported ? "Imported config loaded. Review and apply." : ""; color: root.ok; font.pixelSize: 12 }
+                                    MouseArea {
+                                        id: diskArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        enabled: !root.locked
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.selectedDisk = diskRow.modelData.name
+                                    }
                                 }
                             }
-                        }
-
-                        // 1 Identity
-                        Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                anchors.fill: parent
-                                anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.rightMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.topMargin: 16
-                                anchors.bottomMargin: 16
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 8
-                                    Text { text: "Set the machine and user identity. Hostname, username, timezone and password are required."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    FieldLabel { text: "HOSTNAME" }
-                                    TextFieldStyled { text: root.hostname; Layout.fillWidth: true; onTextChanged: root.hostname = text }
-                                    Text { text: "The name of this computer on the network."; color: root.textMuted; font.pixelSize: 11 }
-                                    FieldLabel { text: "USERNAME" }
-                                    TextFieldStyled { text: root.username; Layout.fillWidth: true; onTextChanged: root.username = text }
-                                    Text { text: "Your account name."; color: root.textMuted; font.pixelSize: 11 }
-                                    FieldLabel { text: "TIMEZONE" }
-                                    TimezoneGlobe {
-                                        Layout.fillWidth: true
-                                        selectedTimezone: root.timezone
-                                        Layout.preferredHeight: 320
-                                        onTimezoneSelected: (tz) => root.timezone = tz
-                                    }
-                                    Text { text: "Drag to rotate · Ctrl + scroll to zoom · click a station to pick its timezone. Scrolling the page works everywhere, over the globe too."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    Text { text: "Selected: " + root.timezone; color: root.textPrimary; font.pixelSize: 12 }
-                                    Text { text: "Region/City, e.g. Europe/Bucharest."; color: root.textMuted; font.pixelSize: 11 }
-                                    BigButton {
-                                        text: "Use system timezone (timedatectl)"
-                                        enabled: !root.locked
-                                        onClicked: tzProc.running = true
-                                    }
-                                    FieldLabel { text: "CONSOLE KEYMAP" }
-                                    TextFieldStyled { text: root.keymap; Layout.fillWidth: true; onTextChanged: root.keymap = text }
-                                    Text { text: "Keyboard layout for the console (us, uk, de, ...)."; color: root.textMuted; font.pixelSize: 11 }
-                                    FieldLabel { text: "PASSWORD (ALSO ROOT)" }
-                                    TextFieldStyled { echoMode: TextInput.Password; text: root.password; Layout.fillWidth: true; onTextChanged: root.password = text }
-                                    Text { text: "Used for your account and root; also LUKS if encrypted."; color: root.textMuted; font.pixelSize: 11 }
-                                    Text {
-                                        text: root.password === "" ? "Password cannot be empty." :
-                                              (root.password !== root.passwordConfirm ? "Passwords do not match." : "Password OK")
-                                        color: (root.password === "" || root.password !== root.passwordConfirm) ? root.warn : root.ok
-                                        font.pixelSize: 11
-                                    }
-                                    FieldLabel { text: "CONFIRM PASSWORD" }
-                                    TextFieldStyled { echoMode: TextInput.Password; text: root.passwordConfirm; Layout.fillWidth: true; onTextChanged: root.passwordConfirm = text }
-                                }
+                            Text {
+                                visible: root.disks.length === 0
+                                text: "No disk found to install on."
+                                color: root.warn
+                                font.pixelSize: 13
+                                Layout.margins: 12
                             }
                         }
-
-                        // 2 Disk
-                        Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                anchors.fill: parent
-                                anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.rightMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.topMargin: 16
-                                anchors.bottomMargin: 16
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 8
-                                    Text { text: "Choose the target disk and install mode. Full wipe erases the whole disk; dual boot keeps Windows."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    FieldLabel { text: "TARGET DISK" }
-                                    ComboBoxStyled {
-                                        Layout.fillWidth: true
-                                        model: root.disks
-                                        textRole: "label"
-                                        currentIndex: {
-                                            for (let i = 0; i < root.disks.length; i++) if (root.disks[i].name === root.selectedDisk) return i;
-                                            return 0;
-                                        }
-                                        onActivated: root.selectedDisk = root.disks[currentIndex].name
-                                    }
-                                    FieldLabel { text: "INSTALL MODE" }
-                                    ComboBoxStyled {
-                                        Layout.fillWidth: true
-                                        model: ["fullwipe", "dualboot", "manual"]
-                                        currentIndex: Math.max(0, ["fullwipe","dualboot","manual"].indexOf(root.mode))
-                                        onActivated: root.mode = currentText
-                                    }
-                                    CheckBox {
-                                        enabled: !root.locked
-                                        text: "Encrypt root with LUKS2"
-                                        checked: root.encrypt
-                                        onToggled: root.encrypt = checked
-                                        contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 }
-                                    }
-                                    Text { text: "Selected: " + root.selectedDisk; color: root.textMuted; font.pixelSize: 12 }
-                                    FieldLabel { text: "EFI PARTITION SIZE (MB)" }
-                                    TextFieldStyled {
-                                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 14
+                            Group {
+                                title: "How"
+                                hint: (root.modeOptions.find(x => x.key === root.mode) || {}).about || ""
+                                boxed: false
+                                Chips {
+                                    options: root.modeOptions
+                                    current: root.mode
+                                    onChosen: key => root.mode = key
+                                }
+                            }
+                            Group {
+                                title: "Encryption and boot"
+                                ToggleRow {
+                                    first: true
+                                    title: "Encrypt the system (LUKS2)"
+                                    sub: "Your password unlocks it at every start."
+                                    checked: root.encrypt
+                                    onToggled: v => root.encrypt = v
+                                }
+                                FieldRow {
+                                    label: "EFI partition"
+                                    Field {
+                                        mono: true
                                         text: root.efiSizeMb
-                                        inputMethodHints: Qt.ImhDigitsOnly
                                         validator: IntValidator { bottom: 300; top: 8192 }
-                                        onTextChanged: {
-                                            const v = parseInt(text, 10);
-                                            if (!isNaN(v) && v >= 300 && v <= 8192) root.efiSizeMb = v;
-                                        }
+                                        onEdited: t => { const v = parseInt(t, 10); if (!isNaN(v) && v >= 300 && v <= 8192) root.efiSizeMb = v; }
                                     }
-                                    Text { text: "2 GiB (2048 MB) recommended: the ESP holds the kernel, initramfs and bootloader, and keeps room for snapshots/firmware updates."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                    Text { text: "MB"; color: root.textMuted; font.pixelSize: 12 }
+                                }
+                            }
+                            Text {
+                                text: "2048 MB is recommended: the EFI partition holds the kernel, the initramfs and the boot menu, with room for snapshots and firmware updates."
+                                color: root.textMuted
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 2
+                            }
+                        }
+                    }
+
+                    // 3 Packages
+                    RowLayout {
+                        spacing: 20
+                        Group {
+                            title: "Profiles"
+                            hint: "What comes installed. Choose one or more; at least one stays on."
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            Repeater {
+                                model: [
+                                    { key: "profMinimal", title: "Minimal", sub: "The base system: browser, files, terminal" },
+                                    { key: "profStudent", title: "Student", sub: "Study tools" },
+                                    { key: "profDev", title: "Dev", sub: "Development tools and languages" },
+                                    { key: "profGaming", title: "Gaming", sub: "The gaming stack" },
+                                    { key: "profCreative", title: "Creative", sub: "Media and creative apps" }
+                                ]
+                                delegate: ToggleRow {
+                                    required property var modelData
+                                    required property int index
+                                    first: index === 0
+                                    title: modelData.title
+                                    sub: modelData.sub
+                                    checked: root[modelData.key]
+                                    onToggled: v => {
+                                        // the last profile on stays on
+                                        const others = ["profMinimal", "profStudent", "profDev", "profGaming", "profCreative"].filter(k => k !== modelData.key);
+                                        if (!v && !others.some(k => root[k])) return;
+                                        root[modelData.key] = v;
+                                    }
                                 }
                             }
                         }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 12
+                            Group {
+                                title: "Browser"
+                                boxed: false
+                                Chips {
+                                    options: [{ key: "chromium", label: "Chromium" }, { key: "firefox", label: "Firefox" }, { key: "zen", label: "Zen" }]
+                                    current: root.browser
+                                    onChosen: key => root.browser = key
+                                }
+                            }
+                            RowLayout {
+                                spacing: 20
+                                Group {
+                                    title: "Packages from"
+                                    boxed: false
+                                    Layout.preferredWidth: 1
+                                    Chips {
+                                        options: [{ key: "auto", label: "Auto" }, { key: "offline", label: "Offline" }, { key: "online", label: "Online" }]
+                                        current: root.source
+                                        onChosen: key => root.source = key
+                                    }
+                                }
+                                Group {
+                                    title: "Terminal editor"
+                                    boxed: false
+                                    Layout.preferredWidth: 1
+                                    Chips {
+                                        options: [{ key: "nano", label: "Nano" }, { key: "vim", label: "Vim" }]
+                                        current: root.editor
+                                        onChosen: key => root.editor = key
+                                    }
+                                }
+                            }
+                            Text {
+                                text: "No internet connection: the bundled offline repository is proposed, and an Online source would fail to download packages."
+                                color: root.warn
+                                visible: !root.netChecking && !root.online
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 2
+                            }
+                            Group {
+                                title: "Extras"
+                                ToggleRow {
+                                    first: true
+                                    title: "Web apps"
+                                    sub: "Reddit, ChatGPT, YouTube, YouTube Music, WhatsApp, Gmail, GitHub"
+                                    checked: root.seedWebapps
+                                    onToggled: v => root.seedWebapps = v
+                                }
+                                ToggleRow {
+                                    title: "Flatpak"
+                                    sub: "Apps from Flathub, beside the Arch packages"
+                                    checked: root.flatpak
+                                    onToggled: v => root.flatpak = v
+                                }
+                                ToggleRow {
+                                    title: "Login screen themes"
+                                    sub: "Echo, pixie, qylock… about 400 MB to download, 600 MB on disk"
+                                    checked: root.installLockscreens
+                                    onToggled: v => root.installLockscreens = v
+                                }
+                            }
+                        }
+                    }
 
-                        // 3 Packages
-                        Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                anchors.fill: parent
-                                anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.rightMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.topMargin: 16
-                                anchors.bottomMargin: 16
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 8
-                                    Text { text: "Select one or more package profiles plus browser, Flatpak, source and editor."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    FieldLabel { text: "PROFILES" }
-                                    Text { text: "Select one or more profiles (at least one required)."; color: root.textMuted; font.pixelSize: 11 }
-                                    Text { text: "Minimal: base system. Student: study tools. Dev: development. Gaming: gaming stack. Creative: media apps."; color: root.textMuted; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    CheckBox { enabled: !root.locked; text: "Minimal"; checked: root.profMinimal; onToggled: { if (!checked && !(root.profStudent||root.profDev||root.profGaming||root.profCreative)) { checked = true; return; } root.profMinimal = checked; } contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    CheckBox { enabled: !root.locked; text: "Student"; checked: root.profStudent; onToggled: { if (!checked && !(root.profMinimal||root.profDev||root.profGaming||root.profCreative)) { checked = true; return; } root.profStudent = checked; } contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    CheckBox { enabled: !root.locked; text: "Dev"; checked: root.profDev; onToggled: { if (!checked && !(root.profMinimal||root.profStudent||root.profGaming||root.profCreative)) { checked = true; return; } root.profDev = checked; } contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    CheckBox { enabled: !root.locked; text: "Gaming"; checked: root.profGaming; onToggled: { if (!checked && !(root.profMinimal||root.profStudent||root.profDev||root.profCreative)) { checked = true; return; } root.profGaming = checked; } contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    CheckBox { enabled: !root.locked; text: "Creative"; checked: root.profCreative; onToggled: { if (!checked && !(root.profMinimal||root.profStudent||root.profDev||root.profGaming)) { checked = true; return; } root.profCreative = checked; } contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    FieldLabel { text: "BROWSER" }
-                                    Text { text: "Default web browser."; color: root.textMuted; font.pixelSize: 11 }
-                                    ComboBoxStyled {
+                    // 4 Aequalyn
+                    RowLayout {
+                        spacing: 20
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 14
+                            Group {
+                                title: "Colours come from"
+                                hint: root.themeMode === "wallpaper" ? "Every wallpaper paints the desktop, the apps and the terminal in its own colours."
+                                    : root.themeMode === "theme" ? "A theme's own colours, the same whatever the wallpaper."
+                                    : "Light colours, made from the wallpaper."
+                                boxed: false
+                                Chips {
+                                    options: [{ key: "wallpaper", label: "The wallpaper" }, { key: "theme", label: "A theme" }, { key: "light", label: "Light" }]
+                                    current: root.themeMode
+                                    onChosen: key => root.themeMode = key
+                                }
+                            }
+                            Group {
+                                ToggleRow {
+                                    first: true
+                                    title: "GTK apps follow the colours"
+                                    sub: "Third-party GTK apps take the desktop's colours too"
+                                    checked: root.themeApps
+                                    onToggled: v => root.themeApps = v
+                                }
+                                ToggleRow {
+                                    title: "Dry run"
+                                    sub: "Writes install.toml and installs nothing"
+                                    checked: root.dryRun
+                                    onToggled: v => root.dryRun = v
+                                }
+                            }
+                        }
+                        Group {
+                            title: "The top bar, at first start"
+                            hint: "Its widgets from left to right; move them later on the Bar page of Settings."
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            InfoRow { first: true; label: "Left"; value: root.barLeft.join(", ") }
+                            InfoRow { label: "Middle"; value: root.barCenter.join(", ") }
+                            InfoRow { label: "Right"; value: root.barRight.join(", ") }
+                        }
+                    }
+
+                    // 5 Review
+                    RowLayout {
+                        spacing: 20
+                        // the summary takes a little over a third; the file the rest, so its
+                        // lines wrap less and all of it shows
+                        ColumnLayout {
+                            Layout.fillWidth: false
+                            Layout.preferredWidth: Math.round((scaler.width - 40) * 0.36)
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 12
+                            Group {
+                                title: "Summary"
+                                InfoRow { first: true; label: "Computer"; value: root.hostname }
+                                InfoRow { label: "User"; value: root.username }
+                                InfoRow { label: "Time zone"; value: root.timezone + "  ·  keymap " + root.keymap }
+                                InfoRow { label: "Disk"; value: root.selectedDisk + "  ·  " + root.modeLabel(root.mode) }
+                                InfoRow { label: "Encryption"; value: root.encrypt ? "On (LUKS2)" : "Off" }
+                                InfoRow { label: "Profiles"; value: root.selectedProfiles().map(root.cap).join(", ") }
+                                InfoRow { label: "Apps"; value: root.cap(root.browser) + "  ·  " + root.cap(root.editor) + (root.flatpak ? "  ·  Flatpak" : "") }
+                                InfoRow { label: "Colours"; value: "From " + (root.themeMode === "theme" ? "a theme" : root.themeMode === "light" ? "the wallpaper, light" : "the wallpaper") }
+                            }
+                            Group {
+                                visible: root.imported
+                                hint: "Imported configs don't store passwords: type one before installing."
+                                FieldRow { first: true; label: "Password"; Field { echoMode: TextInput.Password; text: root.password; onEdited: t => root.password = t } }
+                                FieldRow { label: "Again"; Field { echoMode: TextInput.Password; text: root.passwordConfirm; onEdited: t => root.passwordConfirm = t } }
+                            }
+                            Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                            BigButton {
+                                Layout.fillWidth: true
+                                primary: true
+                                enabled: !(root.writing || root.applying) && !root.locked
+                                text: root.writing ? "Writing…" : (root.applying ? "Applying…" : (root.dryRun ? "Write install.toml (dry run)" : "Install Aequalyn"))
+                                onClicked: root.startApply()
+                            }
+                        }
+                        Group {
+                            id: tomlGroup
+                            title: "install.toml"
+                            hint: "Nothing is written to disk until you press Install."
+                            fill: true
+                            readonly property var parts: {
+                                const t = root.generateToml();
+                                const i = t.indexOf("\n[packages]");
+                                return i < 0 ? [t, ""] : [t.slice(0, i), t.slice(i + 1)];
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.margins: 10
+                                spacing: 16
+                                Repeater {
+                                    model: 2
+                                    delegate: Text {
+                                        required property int index
                                         Layout.fillWidth: true
-                                        model: ["Chromium", "Firefox", "Zen"]
-                                        currentIndex: Math.max(0, ["Chromium","Firefox","Zen"].map(x=>x.toLowerCase()).indexOf(root.browser))
-                                        onActivated: root.browser = currentText.toLowerCase()
+                                        Layout.preferredWidth: 1
+                                        Layout.fillHeight: true
+                                        text: tomlGroup.parts[index]
+                                        color: root.textSecondary
+                                        font.family: "monospace"
+                                        font.pixelSize: 10
+                                        lineHeight: 0.95
+                                        wrapMode: Text.WrapAnywhere
+                                        verticalAlignment: Text.AlignTop
                                     }
-                                    CheckBox { enabled: !root.locked; text: "Seed web apps"; checked: root.seedWebapps; onToggled: root.seedWebapps = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    Text { text: "Adds Reddit, ChatGPT, YouTube, YouTube Music, WhatsApp, Gmail and GitHub, on Super + Shift + D/G/T/Y/H/E/B. The browser chosen above opens them; it can be changed later in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    CheckBox { enabled: !root.locked; text: "Enable Flatpak"; checked: root.flatpak; onToggled: root.flatpak = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    CheckBox { enabled: !root.locked; text: "Install SDDM lock screens (~400 MB download, ~600 MB disk)"; checked: root.installLockscreens; onToggled: root.installLockscreens = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    Text { text: "Optional SDDM login themes (echo, pixie, qylock, ...). If skipped, the Lock Screens page is hidden in Settings."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    Text { text: "Enable Flatpak application support."; color: root.textMuted; font.pixelSize: 11 }
-                                    FieldLabel { text: "PACKAGE SOURCE" }
-                                    Text { text: "Where packages are installed from."; color: root.textMuted; font.pixelSize: 11 }
-                                    ComboBoxStyled {
-                                        Layout.fillWidth: true
-                                        model: ["Auto", "Offline", "Online"]
-                                        currentIndex: Math.max(0, ["Auto","Offline","Online"].map(x=>x.toLowerCase()).indexOf(root.source))
-                                        onActivated: root.source = currentText.toLowerCase()
+                                }
+                            }
+                        }
+                    }
+
+                    // 6 Finish: progress while installing, then a staged end -- Finish
+                    // acknowledges the outcome, and Reboot Now (success) or Debug /
+                    // Retry (failure) follow it. There is no Close installer once Install
+                    // has been pressed: quitting mid-install would kill the apply, and
+                    // after it there is nothing left to decide but reboot, retry or debug.
+                    // After a failure the help sits beside the log, so nothing scrolls.
+                    ColumnLayout {
+                        spacing: 12
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 16
+                            Text {
+                                text: (root.writing || root.applying) ? "Installing Aequalyn…"
+                                     : root.installFinished ? "Installation complete"
+                                     : root.installFailed ? "Installation failed"
+                                     : "Finish"
+                                color: root.installFailed ? root.warn : (root.installFinished ? root.ok : root.textPrimary)
+                                font.pixelSize: 18
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                text: root.statusText
+                                visible: root.statusText !== ""
+                                color: root.installFailed ? root.warn : root.textSecondary
+                                font.pixelSize: 12
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                        }
+                        ProgressBar {
+                            id: progress
+                            Layout.fillWidth: true
+                            implicitHeight: 6
+                            indeterminate: root.writing || root.applying
+                            value: (root.writing || root.applying) ? 0 : 1
+                            background: Rectangle { implicitHeight: 6; radius: 3; color: root.bgSelected }
+                            contentItem: Item {
+                                implicitHeight: 6
+                                clip: true
+                                Rectangle {
+                                    id: bar
+                                    height: parent.height
+                                    radius: 3
+                                    color: root.installFailed ? root.warn : root.installFinished ? root.ok : root.accent
+                                    width: progress.indeterminate ? parent.width * 0.3 : parent.width * progress.visualPosition
+                                    x: 0
+                                    SequentialAnimation on x {
+                                        running: progress.indeterminate
+                                        loops: Animation.Infinite
+                                        NumberAnimation { from: -bar.width; to: progress.width; duration: 1400; easing.type: Easing.InOutQuad }
                                     }
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: 16
+                            LogView {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.minimumHeight: 80
+                            }
+                            // after a failure: what went wrong, and where to get help
+                            ColumnLayout {
+                                visible: root.installFailed
+                                Layout.preferredWidth: 380
+                                Layout.maximumWidth: 380
+                                Layout.fillHeight: true
+                                spacing: 12
+                                // offline: no AI debug session without the network, so
+                                // say sorry and point at the log
+                                Group {
+                                    visible: !root.online
+                                    title: "We're sorry"
                                     Text {
-                                        text: "No internet connection detected: the bundled offline repository is proposed, and an Online source would fail to download packages."
-                                        color: root.warn
-                                        visible: !root.netChecking && !root.online
-                                        font.pixelSize: 11
+                                        text: "Your installation failed. Please look at the log, then retry."
+                                        color: root.textSecondary
+                                        font.pixelSize: 12
                                         wrapMode: Text.WordWrap
                                         Layout.fillWidth: true
+                                        Layout.margins: 12
+                                        Layout.bottomMargin: 2
                                     }
-                                    FieldLabel { text: "TERMINAL EDITOR" }
-                                    Text { text: "Default editor for the terminal."; color: root.textMuted; font.pixelSize: 11 }
-                                    ComboBoxStyled {
-                                        Layout.fillWidth: true
-                                        model: ["Nano", "Vim"]
-                                        currentIndex: Math.max(0, ["Nano","Vim"].map(x=>x.toLowerCase()).indexOf(root.editor))
-                                        onActivated: root.editor = currentText.toLowerCase()
-                                    }
-                                }
-                            }
-                        }
-
-                        // 4 Aequalyn
-                        Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                anchors.fill: parent
-                                anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.rightMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.topMargin: 16
-                                anchors.bottomMargin: 16
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 8
-                                    Text { text: "Pick the default colour mode and whether GTK apps follow the theme."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                    FieldLabel { text: "COLOUR MODE" }
-                                    ComboBoxStyled {
-                                        Layout.fillWidth: true
-                                        model: ["Wallpaper", "Theme", "Light"]
-                                        currentIndex: Math.max(0, ["Wallpaper","Theme","Light"].map(x=>x.toLowerCase()).indexOf(root.themeMode))
-                                        onActivated: root.themeMode = currentText.toLowerCase()
-                                    }
-                                    CheckBox { enabled: !root.locked; text: "Theme third-party GTK apps"; checked: root.themeApps; onToggled: root.themeApps = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                    CheckBox { enabled: !root.locked; text: "Dry run (write config, do not install)"; checked: root.dryRun; onToggled: root.dryRun = checked; contentItem: Text { text: parent.text; color: root.textPrimary; font.pixelSize: 13; leftPadding: parent.indicator.width + 6 } }
-                                }
-                            }
-                        }
-
-                        // 5 Review
-                        Item {
-                            ScrollView {
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                anchors.fill: parent
-                                anchors.leftMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.rightMargin: Math.max(16, (parent.width - 560) / 2)
-                                anchors.topMargin: 16
-                                anchors.bottomMargin: 16
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 8
-                                    Text { text: "Review install.toml"; color: root.textPrimary; font.pixelSize: 16; font.weight: Font.DemiBold }
-                                    Text { text: "Nothing has been written to disk yet. Confirm to apply."; color: root.textMuted; font.pixelSize: 12 }
-                                    TextArea {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 230
-                                        text: root.generateToml()
+                                    // the whole path: it is what this box is for
+                                    Text {
+                                        text: root.logFile
+                                        color: root.accent
                                         font.family: "monospace"
-                                        font.pixelSize: 12
-                                        color: root.textPrimary
-                                        readOnly: true
-                                        background: Rectangle { color: root.bgSurface; radius: 12; border.color: root.border }
-                                    }
-                                    Text { text: root.statusText; color: root.warn; visible: root.statusText !== ""; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-
-                                    ColumnLayout {
-                                        visible: root.imported
-                                        Layout.fillWidth: true
-                                        spacing: 8
-                                        FieldLabel { text: "PASSWORD (ALSO ROOT)" }
-                                        TextFieldStyled { echoMode: TextInput.Password; text: root.password; Layout.fillWidth: true; onTextChanged: root.password = text }
-                                        FieldLabel { text: "CONFIRM PASSWORD" }
-                                        TextFieldStyled { echoMode: TextInput.Password; text: root.passwordConfirm; Layout.fillWidth: true; onTextChanged: root.passwordConfirm = text }
-                                        Text { text: "Imported configs do not store passwords. Enter one before applying."; color: root.textMuted; font.pixelSize: 11 }
-                                    }
-
-                                    BigButton {
-                                        primary: true
-                                        Layout.preferredWidth: 260
-                                        Layout.alignment: Qt.AlignHCenter
-                                        enabled: !(root.writing || root.applying) && !root.locked
-                                        text: root.writing ? "Writing..." : (root.applying ? "Applying..." : (root.dryRun ? "Write config (dry run)" : "Install"))
-                                        onClicked: root.startApply()
-                                    }
-                                }
-                            }
-                        }
-
-                        // 6 Finish: progress while installing, then a staged
-                        // end -- Finish acknowledges the outcome, and Reboot
-                        // Now (success) or Debug / Retry (failure) follow it.
-                        // The Close installer button is gone for good once
-                        // Install has been pressed: quitting mid-install would
-                        // kill the apply, and after it there is nothing left to
-                        // decide but reboot, retry or debug.
-                        Item {
-                            // scrollable like every other page: on a small
-                            // window the log + the help boxes + the action
-                            // row together are taller than the viewport, and
-                            // the buttons must stay reachable
-                            ScrollView {
-                                anchors.fill: parent
-                                anchors.margins: 16
-                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                ColumnLayout {
-                                    width: parent.width
-                                    spacing: 10
-
-                                    Text {
-                                        text: (root.writing || root.applying) ? "Installing Aequalyn..."
-                                             : root.installFinished ? "Installation complete"
-                                             : root.installFailed ? "Installation failed"
-                                             : "Finish"
-                                        color: root.installFailed ? root.warn : (root.installFinished ? root.ok : root.textPrimary)
-                                        font.pixelSize: 20
-                                        font.weight: Font.DemiBold
-                                    }
-                                    Text {
-                                        text: root.statusText
-                                        color: (root.writing || root.applying) ? root.textSecondary
-                                             : root.installFinished ? root.ok
-                                             : root.installFailed ? root.warn : root.textSecondary
-                                        visible: root.statusText !== ""
                                         font.pixelSize: 12
                                         wrapMode: Text.WrapAnywhere
                                         Layout.fillWidth: true
-                                    }
-                                    ProgressBar {
-                                        Layout.fillWidth: true
-                                        implicitHeight: 16
-                                        indeterminate: root.writing || root.applying
-                                        value: (root.writing || root.applying) ? 0 : 1
-                                    }
-                                    LogView {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                        Layout.minimumHeight: 160
-                                    }
-    
-                                    // Offline failure: no AI debug session without
-                                    // the network, so say sorry and point at the log.
-                                    Rectangle {
-                                        visible: root.installFailed && !root.online
-                                        Layout.fillWidth: true
-                                        implicitHeight: apologyCol.implicitHeight + 20
-                                        radius: 12
-                                        color: root.bgSurface
-                                        border.color: root.warn
-                                        border.width: 1
-                                        ColumnLayout {
-                                            id: apologyCol
-                                            anchors.fill: parent
-                                            anchors.margins: 10
-                                            spacing: 4
-                                            Text {
-                                                text: "Your installation failed, please review the log at the path below and retry. We are sorry for this inconvenience."
-                                                color: root.textPrimary
-                                                font.pixelSize: 14
-                                                wrapMode: Text.WordWrap
-                                                Layout.fillWidth: true
-                                            }
-                                            Text {
-                                                text: root.logFile
-                                                color: root.accent
-                                                font.family: "monospace"
-                                                font.pixelSize: 12
-                                                wrapMode: Text.WrapAnywhere
-                                                Layout.fillWidth: true
-                                            }
-                                        }
-                                    }
-    
-                                    // Any failure: human help, one scan away.
-                                    Rectangle {
-                                        visible: root.installFailed
-                                        Layout.fillWidth: true
-                                        implicitHeight: discordRow.implicitHeight + 20
-                                        radius: 12
-                                        color: root.bgSurface
-                                        border.color: root.border
-                                        border.width: 1
-                                        RowLayout {
-                                            id: discordRow
-                                            anchors.fill: parent
-                                            anchors.margins: 10
-                                            spacing: 14
-                                            // white card: a QR scans best dark on light
-                                            Rectangle {
-                                                Layout.preferredWidth: 140
-                                                Layout.preferredHeight: 140
-                                                radius: 10
-                                                color: "#ffffff"
-                                                Image {
-                                                    anchors.centerIn: parent
-                                                    source: Qt.resolvedUrl("assets/discord-qr.png")
-                                                    asynchronous: true
-                                                    width: 124
-                                                    height: 124
-                                                    fillMode: Image.PreserveAspectFit
-                                                    smooth: true
-                                                }
-                                            }
-                                            ColumnLayout {
-                                                Layout.fillWidth: true
-                                                spacing: 4
-                                                Text { text: "Need a hand?"; color: root.textPrimary; font.pixelSize: 15; font.weight: Font.DemiBold }
-                                                Text {
-                                                    text: "Please join us at " + root.discordInvite
-                                                    color: root.accent
-                                                    font.pixelSize: 13
-                                                    wrapMode: Text.WrapAnywhere
-                                                    Layout.fillWidth: true
-                                                }
-                                                Text { text: "Scan the code with your phone to get to us for help."; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                                Text {
-                                                    text: "Debug opens an AI repair session in a foot terminal; the first run may ask you to sign in."
-                                                    color: root.textMuted
-                                                    visible: root.finishAcknowledged && root.online
-                                                    font.pixelSize: 12
-                                                    wrapMode: Text.WordWrap
-                                                    Layout.fillWidth: true
-                                                }
-                                            }
-                                        }
-                                    }
-    
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 10
-                                        BigButton {
-                                            primary: true
-                                            Layout.preferredWidth: 240
-                                            text: "Finish"
-                                            visible: !root.finishAcknowledged && (root.installFinished || root.installFailed)
-                                            onClicked: root.finishAcknowledged = true
-                                        }
-                                        BigButton {
-                                            primary: true
-                                            Layout.preferredWidth: 240
-                                            text: root.rebooting ? "Rebooting..." : "Reboot Now"
-                                            visible: root.finishAcknowledged && root.installFinished && !root.installFailed
-                                            enabled: !root.rebooting
-                                            onClicked: {
-                                                root.saveGeom();
-                                                root.rebooting = true;
-                                                root.statusText = "Rebooting...";
-                                                // the goodbye splash covers the screen
-                                                // first; the timer fires the reboot
-                                                root.showSplash = true;
-                                                splashTimer.start();
-                                            }
-                                        }
-                                        BigButton {
-                                            primary: true
-                                            Layout.preferredWidth: 240
-                                            text: "Debug"
-                                            visible: root.finishAcknowledged && root.installFailed && root.online
-                                            onClicked: root.startDebug()
-                                        }
-                                        BigButton {
-                                            primary: !root.online
-                                            Layout.preferredWidth: 200
-                                            text: "Retry install"
-                                            visible: root.finishAcknowledged && root.installFailed
-                                            onClicked: {
-                                                root.finishAcknowledged = false;
-                                                root.step = 5;
-                                            }
-                                        }
-                                        Item { Layout.fillWidth: true }
+                                        Layout.margins: 12
+                                        Layout.topMargin: 0
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    // bottom step bar
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 116
-                        color: root.bgCard
-                        Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 16
-                            anchors.rightMargin: 16
-                            spacing: 48
-                            Repeater {
-                                model: root.stepNames
-                                delegate: Rectangle {
-                                    required property int index
-                                    required property var modelData
-                                    visible: !(root.imported && index > 0 && index < 5)
-                                    Layout.preferredWidth: visible ? 150 : 0
-                                    height: 52
-                                    radius: 12
-                                    color: index === root.step ? Qt.rgba(0.537, 0.706, 0.98, 0.18) : "transparent"
-                                    border.color: index === root.step ? root.accent : "transparent"
-                                    border.width: 1
-                                    opacity: (!root.locked && (index <= root.maxAllowedStep
-                                        // a failed install unlocks the wizard for a retry; the
-                                        // Finish page stays reachable for Debug / Retry / Discord
-                                        || (index === 6 && root.installFailed))) ? 1.0 : 0.4
+                                // any failure: human help, one scan away
+                                Group {
+                                    title: "Need a hand?"
                                     RowLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: 8
-                                        spacing: 8
+                                        Layout.fillWidth: true
+                                        Layout.margins: 10
+                                        spacing: 12
+                                        // white card: a QR scans best dark on light
                                         Rectangle {
-                                            width: 20; height: 20; radius: 12
-                                            color: index <= root.step ? root.accent : root.bgSurface
-                                            border.color: root.border
-                                            Text {
+                                            Layout.preferredWidth: 112
+                                            Layout.preferredHeight: 112
+                                            radius: 10
+                                            color: "#ffffff"
+                                            Image {
                                                 anchors.centerIn: parent
-                                                text: index < root.step ? "✓" : (index + 1)
-                                                color: index <= root.step ? root.bgBase : root.textMuted
-                                                font.pixelSize: 10
-                                                font.bold: true
+                                                source: Qt.resolvedUrl("assets/discord-qr.png")
+                                                asynchronous: true
+                                                width: 98
+                                                height: 98
+                                                fillMode: Image.PreserveAspectFit
+                                                smooth: false
                                             }
                                         }
                                         ColumnLayout {
                                             Layout.fillWidth: true
-                                            spacing: 0
+                                            spacing: 4
+                                            Text { text: "Join us at"; color: root.textSecondary; font.pixelSize: 12 }
+                                            Text { text: root.discordInvite; color: root.accent; font.pixelSize: 12; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
+                                            Text { text: "Scan the code with your phone to get to us for help."; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                             Text {
-                                                text: modelData
-                                                color: index === root.step ? root.textPrimary : root.textMuted
-                                                font.pixelSize: 12
-                                                font.weight: index === root.step ? Font.DemiBold : Font.Normal
-                                            }
-                                            Text {
-                                                text: root.stepDescriptions[index]
+                                                text: "Debug opens an AI repair session in a terminal; the first run may ask you to sign in."
                                                 color: root.textMuted
-                                                font.pixelSize: 9
+                                                visible: root.finishAcknowledged && root.online
+                                                font.pixelSize: 11
                                                 wrapMode: Text.WordWrap
                                                 Layout.fillWidth: true
                                             }
                                         }
                                     }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        enabled: !root.locked && (index <= root.maxAllowedStep
-                                            || (index === 6 && root.installFailed))
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.step = index
-                                    }
+                                }
+                                Item { Layout.fillHeight: true }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            BigButton {
+                                primary: true
+                                Layout.preferredWidth: 240
+                                text: "Finish"
+                                visible: !root.finishAcknowledged && (root.installFinished || root.installFailed)
+                                onClicked: root.finishAcknowledged = true
+                            }
+                            BigButton {
+                                primary: true
+                                Layout.preferredWidth: 240
+                                text: root.rebooting ? "Rebooting…" : "Reboot Now"
+                                visible: root.finishAcknowledged && root.installFinished && !root.installFailed
+                                enabled: !root.rebooting
+                                onClicked: {
+                                    root.saveGeom();
+                                    root.rebooting = true;
+                                    root.statusText = "Rebooting...";
+                                    // the goodbye splash covers the screen first; the timer
+                                    // fires the reboot
+                                    root.showSplash = true;
+                                    splashTimer.start();
+                                }
+                            }
+                            BigButton {
+                                primary: true
+                                Layout.preferredWidth: 240
+                                text: "Debug"
+                                visible: root.finishAcknowledged && root.installFailed && root.online
+                                onClicked: root.startDebug()
+                            }
+                            BigButton {
+                                primary: !root.online
+                                Layout.preferredWidth: 200
+                                text: "Retry install"
+                                visible: root.finishAcknowledged && root.installFailed
+                                onClicked: {
+                                    root.finishAcknowledged = false;
+                                    root.step = 5;
                                 }
                             }
                             Item { Layout.fillWidth: true }
-                            Text {
-                                text: root.isRoot ? "root" : "not root"
-                                color: root.isRoot ? root.ok : root.warn
-                                font.pixelSize: 10
-                            }
-                        }
-                    }
-
-                    // footer
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 64
-                        color: "transparent"
-                        Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 20
-                            anchors.rightMargin: 20
-                            spacing: 12
-                            BigButton {
-                                text: "Back"
-                                enabled: root.step > 0 && !root.locked
-                                onClicked: root.step--
-                            }
-                            Text {
-                                // why Next is unavailable, said in one line
-                                text: root.stepHint
-                                visible: root.stepHint !== ""
-                                Layout.fillWidth: true
-                                horizontalAlignment: Text.AlignHCenter
-                                color: root.warn
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                            }
-                            Item { Layout.fillWidth: true; visible: root.stepHint === "" }
-                            BigButton {
-                                primary: true
-                                Layout.preferredWidth: 170
-                                text: "Next"
-                                visible: root.step < 6
-                                // a page with missing details can be entered,
-                                // never passed: the wizard stops right where
-                                // the next required input is
-                                enabled: root.step < 6 && !root.locked && root.step < root.maxAllowedStep
-                                onClicked: { if (root.imported && root.step === 0) root.step = 5; else root.step++; }
-                            }
+                            Text { text: "Log: " + root.logFile; color: root.textMuted; font.pixelSize: 11; font.family: "monospace"; elide: Text.ElideLeft; Layout.maximumWidth: 520 }
                         }
                     }
                 }
+
+                // ---- the steps, as they were ------------------------------------------------
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 116
+                    color: root.bgCard
+                    Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
+                    RowLayout {
+                        id: stepRow
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+                        // as before, but closer together when seven don't fit
+                        spacing: Math.max(6, Math.min(48, (width - 7 * 150 - 60) / 7))
+                        Repeater {
+                            model: root.stepNames
+                            delegate: Rectangle {
+                                required property int index
+                                required property var modelData
+                                visible: !(root.imported && index > 0 && index < 5)
+                                Layout.preferredWidth: visible ? 150 : 0
+                                height: 52
+                                radius: 12
+                                color: index === root.step ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.16) : "transparent"
+                                border.color: index === root.step ? root.accent : "transparent"
+                                border.width: 1
+                                opacity: (!root.locked && (index <= root.maxAllowedStep
+                                    // a failed install unlocks the wizard for a retry; the
+                                    // Finish page stays reachable for Debug / Retry / Discord
+                                    || (index === 6 && root.installFailed))) ? 1.0 : 0.4
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 8
+                                    Rectangle {
+                                        width: 20; height: 20; radius: 12
+                                        color: index <= root.step ? root.accent : root.bgSurface
+                                        border.color: root.border
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: index < root.step ? "✓" : (index + 1)
+                                            color: index <= root.step ? root.bgBase : root.textMuted
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 0
+                                        Text {
+                                            text: modelData
+                                            color: index === root.step ? root.textPrimary : root.textMuted
+                                            font.pixelSize: 12
+                                            font.weight: index === root.step ? Font.DemiBold : Font.Normal
+                                        }
+                                        Text {
+                                            text: root.stepDescriptions[index]
+                                            color: root.textMuted
+                                            font.pixelSize: 9
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: !root.locked && (index <= root.maxAllowedStep
+                                        || (index === 6 && root.installFailed))
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.step = index
+                                }
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                        Text {
+                            text: root.isRoot ? "root" : "not root"
+                            color: root.isRoot ? root.ok : root.warn
+                            font.pixelSize: 10
+                        }
+                    }
+                }
+
+                // footer
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 64
+                    color: "transparent"
+                    Rectangle { anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 20
+                        anchors.rightMargin: 20
+                        spacing: 12
+                        BigButton {
+                            text: "Back"
+                            enabled: root.step > 0 && !root.locked
+                            onClicked: root.step--
+                        }
+                        Text {
+                            // why Next is unavailable, said in one line
+                            text: root.stepHint
+                            visible: root.stepHint !== ""
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            color: root.warn
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                        }
+                        Item { Layout.fillWidth: true; visible: root.stepHint === "" }
+                        BigButton {
+                            primary: true
+                            Layout.preferredWidth: 170
+                            text: "Next"
+                            visible: root.step < 6
+                            // a page with missing details can be entered, never passed:
+                            // the wizard stops right where the next required input is
+                            enabled: root.step < 6 && !root.locked && root.step < root.maxAllowedStep
+                            onClicked: { if (root.imported && root.step === 0) root.step = 5; else root.step++; }
+                        }
+                    }
+                }
+            }
             }
         }
     }
@@ -1558,34 +1972,47 @@ Scope {
         Rectangle {
             anchors.fill: parent
             gradient: Gradient {
-                GradientStop { position: 0.0; color: "#1a1b26" }
-                GradientStop { position: 1.0; color: "#24283b" }
+                GradientStop { position: 0.0; color: root.bgBase }
+                GradientStop { position: 1.0; color: root.bgCard }
             }
 
             ColumnLayout {
                 anchors.centerIn: parent
-                spacing: 20
+                // a little above the middle
+                anchors.verticalCenterOffset: -Math.round(parent.height * 0.06)
+                // sizes from the screen's height, so it looks the same on any screen
+                readonly property real unit: parent.height / 1080
+                spacing: Math.round(14 * unit)
                 opacity: root.showSplash ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 450; easing.type: Easing.InOutQuad } }
 
-                Rectangle {
+                // the æ mark alone, large (its shape is 320 x 200)
+                Image {
                     Layout.alignment: Qt.AlignHCenter
-                    width: 88; height: 88; radius: 26
-                    color: root.accent
-                    Text { anchors.centerIn: parent; text: "æ"; color: root.bgBase; font.pixelSize: 44; font.bold: true }
+                    Layout.preferredWidth: Math.round(416 * parent.unit)
+                    Layout.preferredHeight: Math.round(260 * parent.unit)
+                    // room between the mark and the words, which sit lower
+                    Layout.bottomMargin: Math.round(72 * parent.unit)
+                    source: Qt.resolvedUrl("assets/ae-mark.svg")
+                    sourceSize.width: Math.round(416 * parent.unit)
+                    sourceSize.height: Math.round(260 * parent.unit)
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    mipmap: true
+                    Accessible.name: "Aequalyn"
                 }
                 Text {
                     Layout.alignment: Qt.AlignHCenter
                     text: "Enjoy Your Distro!"
                     color: root.textPrimary
-                    font.pixelSize: 46
+                    font.pixelSize: Math.round(66 * parent.unit)
                     font.weight: Font.DemiBold
                 }
                 Text {
                     Layout.alignment: Qt.AlignHCenter
                     text: "Rebooting into your new system..."
                     color: root.textMuted
-                    font.pixelSize: 16
+                    font.pixelSize: Math.round(21 * parent.unit)
                 }
             }
         }
