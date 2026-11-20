@@ -788,6 +788,22 @@ if command -v git >/dev/null 2>&1 && [[ ! -d /mnt/usr/share/aequalyn/.git ]]; th
     git -C /mnt/usr/share/aequalyn remote add origin https://github.com/Aequalyn/aequalyn.git
 fi
 
+# This machine starts at the ISO's own revision, which every migration in the
+# tree already brought older systems to: running them here could only move it
+# backwards (20261117-2, say, pins the shell revision that introduced
+# Clipscape, and would roll a newer tree back to it). Mark them done so the
+# first aequalyn-update runs none of them; a migration added to the tree
+# after this ISO was built still runs, as it should.
+MIGRATIONS_DONE=/mnt/var/lib/aequalyn/migrations.done
+if [[ -d "$AEQUALYN_ROOT/migrations" ]]; then
+    mkdir -p "$(dirname "$MIGRATIONS_DONE")"
+    for m in "$AEQUALYN_ROOT"/migrations/*.sh; do
+        [[ -e "$m" ]] || continue
+        name=$(basename "$m")
+        grep -qx "$name" "$MIGRATIONS_DONE" 2>/dev/null || printf '%s\n' "$name" >> "$MIGRATIONS_DONE"
+    done
+fi
+
 # Provision agent skill folders (.agents, .claude, ...) for the new user so AI
 # assistants can load Aequalyn's SKILL.md out of the box. Must run after the
 # tree above has been copied into /usr/share/aequalyn.
@@ -801,6 +817,19 @@ fi
 # but this machine is fresh, so here it is planted outright).
 if [[ -x /mnt/usr/share/aequalyn/bin/aequalyn-qt5-dialogs ]]; then
     arch-chroot /mnt /usr/share/aequalyn/bin/aequalyn-qt5-dialogs --install-hook >/dev/null 2>&1 || true
+fi
+
+# Aequalyn FM is this desktop's file manager: give the new user the full
+# registration -- its menu entry and icon, folders opening with it, and its
+# own open/save dialogs behind the portal for every app that asks. The
+# registrations are the launcher's own, run as the user so they land in
+# their home (runuser keeps the caller's environment, so HOME goes along);
+# a user who prefers another file manager switches in Settings, and the hook
+# above keeps a qt5 vlc on the fm portal either way.
+FM_REL="/home/$USERNAME/.config/quickshell/plugins/aequalynfm/bin/aequalyn-fm"
+if [[ -x "/mnt$FM_REL" ]]; then
+    arch-chroot /mnt runuser -u "$USERNAME" -- env HOME="/home/$USERNAME" "$FM_REL" --default >/dev/null 2>&1 || true
+    arch-chroot /mnt runuser -u "$USERNAME" -- env HOME="/home/$USERNAME" "$FM_REL" --portal  >/dev/null 2>&1 || true
 fi
 
 cp "$CONFIG" /mnt/etc/aequalyn/install.toml
