@@ -993,6 +993,15 @@ u=$(id -un 1000 2>/dev/null || true)
 # colours from the wallpaper the install set (the Aequalyn theme's, or the sample
 # one), without putting a different wallpaper on
 [[ -n "$u" ]] && su - "$u" -c 'aequalyn-theme --refresh' >/dev/null 2>&1 || true
+# Web apps are the Store's (its Web apps page manages them): the installer's
+# seed_webapps flag plants the default set once, in the user's own home. The
+# seed only writes what is not there yet -- anything the user removed stays
+# removed -- and takes the browser the installer chose.
+SEED_WA=$(python3 -c 'import tomllib;print(tomllib.load(open("'$C'","rb")).get("packages",{}).get("seed_webapps",False))' 2>/dev/null || echo False)
+if [[ "$SEED_WA" == "True" && -n "$u" ]]; then
+    WA_BROWSER=$(python3 -c 'import tomllib;print(tomllib.load(open("'$C'","rb")).get("packages",{}).get("browser","auto"))' 2>/dev/null || echo auto)
+    su - "$u" -c "aequalyn-webapp seed --browser '$WA_BROWSER'" >/dev/null 2>&1 || true
+fi
 rm -f "$C"
 systemctl disable aequalyn-first-boot.service >/dev/null 2>&1 || true
 EOF
