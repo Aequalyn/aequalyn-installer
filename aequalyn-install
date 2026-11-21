@@ -21,6 +21,30 @@ for arg in "$@"; do
     esac
 done
 
+# The root gate's half. The watchdog starts this as root (the approval window
+# named it, the password fed sudo on a pipe); sudo reset the environment, so
+# the Wayland socket this session draws on is re-found through the staged
+# file -- validated strictly (a wayland-N name with a real socket behind it),
+# never trusted. Then the wizard starts as root on that display, exactly the
+# way `sudo -E` used to start it when the live ISO still had passwordless
+# sudo.
+if [[ "${1:-}" == "--gate" ]]; then
+    [[ ${EUID} -eq 0 ]] || { echo "aequalyn-install: --gate needs root" >&2; exit 1; }
+    user="${SUDO_USER:-}"
+    [[ -n $user ]] || { echo "aequalyn-install: no SUDO_USER: not started by the gate" >&2; exit 1; }
+    uid=$(id -u "$user") || exit 1
+    home=$(getent passwd "$user" | cut -d: -f6)
+    stage="$home/.local/state/aequalyn/gate/install.json"
+    wayland=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("wayland",""))' "$stage" 2>/dev/null || true)
+    rm -f "$stage"
+    [[ $wayland =~ ^wayland-[0-9]+$ ]] || { echo "aequalyn-install: staged Wayland socket is missing or invalid" >&2; exit 1; }
+    [[ -S "/run/user/$uid/$wayland" ]] || { echo "aequalyn-install: no such Wayland socket for $user" >&2; exit 1; }
+    export XDG_RUNTIME_DIR="/run/user/$uid"
+    export WAYLAND_DISPLAY="$wayland"
+    export XDG_SESSION_TYPE=wayland
+    exec bash "$SELF_DIR/aequalyn-install"
+fi
+
 # Delegate non-interactive / special modes to the CLI backend.
 for arg in "$@"; do
     case "$arg" in
