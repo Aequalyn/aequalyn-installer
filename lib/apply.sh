@@ -860,10 +860,31 @@ if [[ -d /usr/share/sddm/themes ]]; then
     mkdir -p /mnt/usr/share/sddm/themes
     cp -r /usr/share/sddm/themes/. /mnt/usr/share/sddm/themes/ 2>/dev/null || true
 fi
+# The default SDDM theme ships with Aequalyn (assets/sddm/aequalyn); copy it
+# from the bundled tree as well, so a fresh install always has the theme that
+# /etc/sddm.conf.d/aequalyn-theme.conf points at even when the live image's
+# /usr/share/sddm/themes is missing or incomplete.
+if [[ -d "$AEQUALYN_ROOT/assets/sddm" ]]; then
+    mkdir -p /mnt/usr/share/sddm/themes
+    cp -r "$AEQUALYN_ROOT/assets/sddm/." /mnt/usr/share/sddm/themes/ 2>/dev/null || true
+fi
+# Make sure the default theme is actually present and readable.
+if [[ -d "$AEQUALYN_ROOT/assets/sddm/aequalyn" ]]; then
+    rm -rf /mnt/usr/share/sddm/themes/aequalyn
+    mkdir -p /mnt/usr/share/sddm/themes/aequalyn
+    cp -r "$AEQUALYN_ROOT/assets/sddm/aequalyn/." /mnt/usr/share/sddm/themes/aequalyn/ 2>/dev/null || true
+    chmod -R 755 /mnt/usr/share/sddm/themes/aequalyn 2>/dev/null || true
+fi
 # SDDM theme fonts (qylock themes ship their own).
 if [[ -d /usr/share/fonts/qylock ]]; then
     mkdir -p /mnt/usr/share/fonts/qylock
     cp -r /usr/share/fonts/qylock/. /mnt/usr/share/fonts/qylock/ 2>/dev/null || true
+fi
+# The default theme's own font.
+if [[ -f "$AEQUALYN_ROOT/assets/sddm/aequalyn/Aequalyn-Regular.ttf" ]]; then
+    mkdir -p /mnt/usr/share/fonts/aequalyn
+    cp -f "$AEQUALYN_ROOT/assets/sddm/aequalyn/Aequalyn-Regular.ttf" /mnt/usr/share/fonts/aequalyn/ 2>/dev/null || true
+    fc-cache -f /mnt/usr/share/fonts 2>/dev/null || true
 fi
 # Plymouth boot splash theme is staged before the chroot, so the initramfs
 # carries it and the calibrated bar; re-copying it here would reset the
@@ -876,6 +897,16 @@ printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
 if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
     mkdir -p /mnt/usr/share/aequalyn
     printf '1\n' > /mnt/usr/share/aequalyn/lockscreens.enabled
+fi
+# The optional floating titlebar plugin: ship it into the new user's home so
+# the deferred load in aequalyn-session-start (and Super + Shift + T) can find
+# it. Fresh installs stamp migration 20261122-1 as done, so it would not run
+# here; copy it outright instead.
+if [[ -f "$AEQUALYN_ROOT/bin/hyprbars.so" ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.local/lib/aequalyn"
+    cp -f "$AEQUALYN_ROOT/bin/hyprbars.so" "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so"
+    chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so" 2>/dev/null || true
+    chmod 755 "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so" 2>/dev/null || true
 fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
