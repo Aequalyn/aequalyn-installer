@@ -93,6 +93,26 @@ Scope {
     property bool profDev: false
     property bool profGaming: false
     property bool profCreative: false
+    property bool profAi: false
+    property bool profService: false
+    property bool profEditor: false
+    property bool profStyle: false
+    property bool profBrowser: false
+    property bool profTerminal: false
+
+    readonly property var profileDefs: [
+        { key: "profMinimal", id: "minimal", title: "Minimal", sub: "The base system: browser, files, terminal" },
+        { key: "profStudent", id: "student", title: "Student", sub: "Study tools" },
+        { key: "profDev", id: "dev", title: "Development", sub: "Languages and developer tools" },
+        { key: "profGaming", id: "gaming", title: "Gaming", sub: "The gaming stack" },
+        { key: "profCreative", id: "creative", title: "Creative", sub: "Media and creative apps" },
+        { key: "profAi", id: "ai", title: "AI", sub: "Local models and runtimes" },
+        { key: "profService", id: "service", title: "Service", sub: "Accounts, chat, sync and remote access" },
+        { key: "profEditor", id: "editor", title: "Editor", sub: "Terminal and graphical editors" },
+        { key: "profStyle", id: "style", title: "Style", sub: "Fonts and looks" },
+        { key: "profBrowser", id: "browser", title: "Browser", sub: "Browser choices" },
+        { key: "profTerminal", id: "terminal", title: "Terminal", sub: "Terminal emulators" }
+    ]
 
     property string browser: "chromium"
     property bool flatpak: false
@@ -188,12 +208,7 @@ Scope {
     }
 
     function selectedProfiles() {
-        const out = [];
-        if (root.profMinimal) out.push("minimal");
-        if (root.profStudent) out.push("student");
-        if (root.profDev) out.push("dev");
-        if (root.profGaming) out.push("gaming");
-        if (root.profCreative) out.push("creative");
+        const out = root.profileDefs.filter(p => root[p.key]).map(p => p.id);
         if (out.length === 0) out.push("minimal");
         return out;
     }
@@ -217,16 +232,11 @@ Scope {
             root.efiSizeMb = disk.efi_size_mb;
         const pkgs = d.packages || {};
         if (pkgs.source) root.source = pkgs.source;
-        root.profMinimal = false; root.profStudent = false; root.profDev = false;
-        root.profGaming = false; root.profCreative = false;
+        for (const p of root.profileDefs) root[p.key] = false;
         if (Array.isArray(pkgs.profiles)) {
-            for (let i = 0; i < pkgs.profiles.length; i++) {
-                const pr = pkgs.profiles[i];
-                if (pr === "minimal") root.profMinimal = true;
-                if (pr === "student") root.profStudent = true;
-                if (pr === "dev") root.profDev = true;
-                if (pr === "gaming") root.profGaming = true;
-                if (pr === "creative") root.profCreative = true;
+            for (const pr of pkgs.profiles) {
+                const def = root.profileDefs.find(p => p.id === pr);
+                if (def) root[def.key] = true;
             }
         }
         if (pkgs && pkgs.browser) root.browser = pkgs.browser;
@@ -1489,13 +1499,7 @@ Scope {
                             Layout.preferredWidth: 1
                             Layout.alignment: Qt.AlignTop
                             Repeater {
-                                model: [
-                                    { key: "profMinimal", title: "Minimal", sub: "The base system: browser, files, terminal" },
-                                    { key: "profStudent", title: "Student", sub: "Study tools" },
-                                    { key: "profDev", title: "Dev", sub: "Development tools and languages" },
-                                    { key: "profGaming", title: "Gaming", sub: "The gaming stack" },
-                                    { key: "profCreative", title: "Creative", sub: "Media and creative apps" }
-                                ]
+                                model: root.profileDefs
                                 delegate: ToggleRow {
                                     required property var modelData
                                     required property int index
@@ -1505,7 +1509,7 @@ Scope {
                                     checked: root[modelData.key]
                                     onToggled: v => {
                                         // the last profile on stays on
-                                        const others = ["profMinimal", "profStudent", "profDev", "profGaming", "profCreative"].filter(k => k !== modelData.key);
+                                        const others = root.profileDefs.map(p => p.key).filter(k => k !== modelData.key);
                                         if (!v && !others.some(k => root[k])) return;
                                         root[modelData.key] = v;
                                     }
