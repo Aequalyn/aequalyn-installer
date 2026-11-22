@@ -347,6 +347,14 @@ mount -o "$MOPTS,subvol=@log" "$ROOT_MAP" /mnt/var/log
 mount -o "$MOPTS,subvol=@pkg" "$ROOT_MAP" /mnt/var/cache/pacman/pkg
 mount -o "$MOPTS,subvol=@.snapshots" "$ROOT_MAP" /mnt/.snapshots
 
+# Ensure traversable permissions on the subvolume roots and mount points,
+# regardless of the live environment's umask.
+chmod 755 /mnt 2>/dev/null || true
+chmod 755 /mnt/home /mnt/var /mnt/boot 2>/dev/null || true
+chmod 700 /mnt/root 2>/dev/null || true
+chmod 1777 /mnt/tmp 2>/dev/null || true
+chmod 750 /mnt/.snapshots 2>/dev/null || true
+
 mkfs.fat -F32 -n AEQUALYN "$EFI_DEV" >/dev/null
 udevadm settle
 mount "$EFI_DEV" /mnt/boot
@@ -383,6 +391,22 @@ info "installing base system (${#PKGS[@]} packages) ..."
 pacstrap -C "$PACMAN_CONF" /mnt "${PKGS[@]}"
 genfstab -U /mnt >> /mnt/etc/fstab
 ok "base system installed"
+
+# Fix directory permissions: pacstrap may inherit a restrictive umask from the
+# live environment, leaving /, /etc, /var, /home, /boot unreadable by non-root
+# users (dbus, sddm, systemd services). That breaks D-Bus and SDDM autologin.
+chmod 755 /mnt 2>/dev/null || true
+for d in etc var home boot usr opt srv mnt tmp; do
+    [[ -e /mnt/$d ]] || continue
+    case "$d" in
+        root) chmod 700 /mnt/$d 2>/dev/null || true ;;
+        tmp) chmod 1777 /mnt/$d 2>/dev/null || true ;;
+        *) chmod 755 /mnt/$d 2>/dev/null || true ;;
+    esac
+done
+# Mount-point dirs for the btrfs subvolumes must also be traversable.
+chmod 755 /mnt/home /mnt/var /mnt/boot 2>/dev/null || true
+chmod 700 /mnt/root 2>/dev/null || true
 
 if [[ "$ENCRYPT" == "true" ]]; then
     printf 'aequalyn_root UUID=%s none luks,discard\n' "$LUKS_UUID" >> /mnt/etc/crypttab
@@ -777,7 +801,19 @@ if [[ -f "$AEQUALYN_ROOT/themes/aequalyn/theme.json" ]]; then
     chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
 fi
 chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
-
+ 
+# Make sure the installed user actually has the shipped themes (light and dark
+# variants included) available, and that the active theme link points at the
+# one this install starts on.
+if [[ -d "$AEQUALYN_ROOT/themes" ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.local/share/aequalyn/themes"
+    cp -r "$AEQUALYN_ROOT/themes/." "/mnt/home/$USERNAME/.local/share/aequalyn/themes/"
+    chown -R "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/share/aequalyn/themes" 2>/dev/null || true
+    mkdir -p "/mnt/home/$USERNAME/.config/aequalyn/current"
+    ln -sfn /usr/share/aequalyn/themes/aequalyn "/mnt/home/$USERNAME/.config/aequalyn/current/theme"
+    chown -h "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/aequalyn/current/theme" 2>/dev/null || true
+fi
+ 
 mkdir -p /mnt/usr/share/aequalyn /mnt/etc/aequalyn
 cp -r "$AEQUALYN_ROOT/." /mnt/usr/share/aequalyn/
 # Make /usr/share/aequalyn a git repo tracking GitHub so aequalyn-update can
@@ -803,6 +839,40 @@ if [[ -d "$AEQUALYN_ROOT/migrations" ]]; then
         grep -qx "$name" "$MIGRATIONS_DONE" 2>/dev/null || printf '%s\n' "$name" >> "$MIGRATIONS_DONE"
     done
 fi
+
+# Console apps shipped on every install (btop, nudu) need a launcher entry
+# that opens them in a terminal: their packages' own .desktop files either
+# assume Terminal=true (btop) or are too old, so plant Aequalyn's versions
+# that go through xdg-terminal-exec (foot/kitty/alacritty/ghostty, ...).
+mkdir -p /mnt/usr/share/applications
+cat > /mnt/usr/share/applications/btop.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=btop++
+GenericName=System Monitor
+Comment=Resource monitor that shows usage and stats for processor, memory, disks, network and processes
+Icon=btop
+Exec=xdg-terminal-exec btop
+Terminal=false
+Categories=System;Monitor;ConsoleOnly;
+Keywords=system;process;task;monitor;btop;
+StartupNotify=false
+DESKTOP
+cat > /mnt/usr/share/applications/nudu.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=nudu
+GenericName=Disk Usage Analyzer
+Comment=See what is using your disk, in the terminal
+Icon=drive-harddisk
+Exec=xdg-terminal-exec nudu
+Terminal=false
+Categories=System;Utility;ConsoleOnly;
+Keywords=disk;usage;du;space;storage;
+StartupNotify=false
+DESKTOP
+chmod 644 /mnt/usr/share/applications/btop.desktop /mnt/usr/share/applications/nudu.desktop
 
 # Provision agent skill folders (.agents, .claude, ...) for the new user so AI
 # assistants can load Aequalyn's SKILL.md out of the box. Must run after the
@@ -891,7 +961,9 @@ fi
 # per-machine BOOT_SECONDS.
 # Default SDDM theme: Aequalyn.
 mkdir -p /mnt/etc/sddm.conf.d
+chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
 printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
+chmod 644 /mnt/etc/sddm.conf.d/aequalyn-theme.conf 2>/dev/null || true
 # Marker for the optional SDDM lock-screen theme pack: the Settings app only
 # shows the Lock Screens page when this file exists.
 if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
@@ -926,6 +998,10 @@ d["appearance"].update(themeMode=sys.argv[2],
                        barOpacity=int(sys.argv[5]),
                        barLeft=left, barCenter=center, barRight=right,
                        pluginOrder=left + center + right)
+# The installed dock pins the file manager, kitty and chromium (the apps that
+# ship on every install). Aequalyn FM's desktop entry is registered above.
+d.setdefault("dock", {})
+d["dock"]["pinned"] = ["aequalyn.fm", "chromium", "kitty"]
 open(p,"w").write(json.dumps(d, indent=2) + "\n")
 PY
 # SDDM: autologin the installed user into the Aequalyn Wayland session. The
@@ -934,8 +1010,10 @@ PY
 SDDM_SESSION=hyprland
 [[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn
 mkdir -p /mnt/etc/sddm.conf.d
+chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
 printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$USERNAME" "$SDDM_SESSION" \
     > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf
+chmod 644 /mnt/etc/sddm.conf.d/aequalyn-autologin.conf 2>/dev/null || true
 
 # Enable the display manager in the target so the machine boots straight into
 # the desktop. This must run inside the chroot: running it on the live ISO only
@@ -1097,6 +1175,24 @@ EOF
     ok "offline pacman key/sync unit enabled"
 fi
 ok "Aequalyn desktop installed"
+
+# ---------------------------------------------------------- permissions -------
+# Re-assert traversable permissions right before unmounting: a restrictive
+# umask or a later step can still leave /etc (and the SDDM config) unreadable
+# by non-root users, which breaks D-Bus, the gate and SDDM autologin.
+chmod 755 /mnt 2>/dev/null || true
+chmod 755 /mnt/etc 2>/dev/null || true
+for d in var home boot usr opt srv mnt tmp; do
+    [[ -e /mnt/$d ]] || continue
+    case "$d" in
+        tmp) chmod 1777 /mnt/$d 2>/dev/null || true ;;
+        root) chmod 700 /mnt/$d 2>/dev/null || true ;;
+        *) chmod 755 /mnt/$d 2>/dev/null || true ;;
+    esac
+done
+chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
+chmod 755 /mnt/usr/share/sddm/themes 2>/dev/null || true
+chmod -R 755 /mnt/usr/share/sddm/themes/aequalyn 2>/dev/null || true
 
 # ---------------------------------------------------------- cleanup ----------
 cp "$LOGFILE" /mnt/var/log/aequalyn-install.log 2>/dev/null || true
