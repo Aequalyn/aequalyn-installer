@@ -779,7 +779,9 @@ if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
     chmod 644 /mnt/usr/share/aequalyn/lockscreens.enabled 2>/dev/null || truefi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
-# settings.json from [aequalyn] section
+# settings.json from [aequalyn] section. Browser theme sync is on for fresh
+# installs so a theme change can publish its colour to the Chrome/Chromium
+# policies; the root gate still asks before writing /etc.
 python3 - "/mnt/home/$USERNAME/.config/aequalyn/settings.json" \
     "$THEME_MODE" "$THEME_APPS" "$BAR_HEIGHT" "$BAR_OPACITY" \
     "$BAR_LEFT" "$BAR_CENTER" "$BAR_RIGHT" <<'PY'
@@ -791,6 +793,7 @@ d.setdefault("appearance", {})
 left, center, right = (sys.argv[6].split(), sys.argv[7].split(), sys.argv[8].split())
 d["appearance"].update(themeMode=sys.argv[2],
                        themeApps=(sys.argv[3]=="true"),
+                       themeBrowser=True,
                        barHeight=int(sys.argv[4]),
                        barOpacity=int(sys.argv[5]),
                        barLeft=left, barCenter=center, barRight=right,
@@ -1022,8 +1025,7 @@ chmod 755 /mnt/usr/share/aequalyn /mnt/etc/aequalyn 2>/dev/null || true
 for d in /mnt/var/lib/pacman /mnt/var/lib/pacman/local /mnt/var/lib/pacman/sync \
          /mnt/var/cache/pacman /mnt/var/cache/pacman/pkg; do
     [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
-done# ---------------------------------------------------------- cleanup ----------
-cp "$LOGFILE" /mnt/var/log/aequalyn-install.log 2>/dev/null || true
+done# ---------------------------------------------------------- cleanup ----------cp "$LOGFILE" /mnt/var/log/aequalyn-install.log 2>/dev/null || true
 umount -R /mnt 2>/dev/null || true
 if [[ "$ENCRYPT" == "true" ]]; then cryptsetup close aequalyn_root 2>/dev/null || true; fi
 ok "filesystems unmounted"
