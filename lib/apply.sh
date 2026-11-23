@@ -407,7 +407,6 @@ for d in /mnt/var/lib/pacman /mnt/var/lib/pacman/local /mnt/var/lib/pacman/sync 
     [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
 done
 
->>>>>>> af30a88 (fix: pin Aequalyn FM and restore pacman dir modes)
 if [[ "$ENCRYPT" == "true" ]]; then
     printf 'aequalyn_root UUID=%s none luks,discard\n' "$LUKS_UUID" >> /mnt/etc/crypttab
 fi
@@ -788,6 +787,15 @@ GID_T=$(arch-chroot /mnt id -g "$USERNAME" 2>/dev/null || awk -F: -v u="$USERNAM
 mkdir -p "/mnt/home/$USERNAME"
 AEQUALYN_SEED_WEBAPPS="$SEED_WEBAPPS" AEQUALYN_WEBAPP_BROWSER="$BROWSER" \
     bash "$AEQUALYN_ROOT/install.sh" --target "/mnt/home/$USERNAME" --owner "$UID_T:$GID_T"
+# The Quickshell lock plugin will not lock without its root-owned PAM services.
+# Fresh installs stamp the migrations that would install them as done below, so
+# call the one-shot helper directly inside the target. SUDO_USER tells it whose
+# ~/.config/quickshell templates to use (root's HOME has none).
+LOCK_APPLY="/home/$USERNAME/.local/bin/aequalyn-apply-lock"
+if [[ -x "/mnt$LOCK_APPLY" ]]; then
+    arch-chroot /mnt env SUDO_USER="$USERNAME" "$LOCK_APPLY" >/dev/null 2>&1 \
+        || warn "could not install Aequalyn lock PAM stacks; run: sudo ~/.local/bin/aequalyn-apply-lock"
+fi
 # install.sh sees the live-ISO mount path; rewrite it for the installed system.
 # Start on the Aequalyn theme's night wallpaper when the tree ships it (it lands
 # in /usr/share/aequalyn just below), else on the sample one.
@@ -803,6 +811,7 @@ fi
 chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
 
 mkdir -p /mnt/usr/share/aequalyn /mnt/etc/aequalyn
+chmod 755 /mnt/usr/share/aequalyn /mnt/etc/aequalyn 2>/dev/null || true
 cp -r "$AEQUALYN_ROOT/." /mnt/usr/share/aequalyn/
 # Make /usr/share/aequalyn a git repo tracking GitHub so aequalyn-update can
 # pull updates later. remote add is local (no network), so offline installs
@@ -899,7 +908,9 @@ printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
 # shows the Lock Screens page when this file exists.
 if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
     mkdir -p /mnt/usr/share/aequalyn
+    chmod 755 /mnt/usr/share/aequalyn 2>/dev/null || true
     printf '1\n' > /mnt/usr/share/aequalyn/lockscreens.enabled
+    chmod 644 /mnt/usr/share/aequalyn/lockscreens.enabled 2>/dev/null || true
 fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
@@ -1121,6 +1132,34 @@ EOF
 fi
 ok "Aequalyn desktop installed"
 
+# ---------------------------------------------------------- permissions -------
+# Re-assert traversable permissions right before unmounting: a restrictive
+# umask or a later step can still leave /etc (and the SDDM config) unreadable
+# by non-root users, which breaks D-Bus, the gate and SDDM autologin.
+chmod 755 /mnt 2>/dev/null || true
+chmod 755 /mnt/etc 2>/dev/null || true
+for d in var home boot usr opt srv mnt tmp; do
+    [[ -e /mnt/$d ]] || continue
+    case "$d" in
+        tmp) chmod 1777 /mnt/$d 2>/dev/null || true ;;
+        root) chmod 700 /mnt/$d 2>/dev/null || true ;;
+        *) chmod 755 /mnt/$d 2>/dev/null || true ;;
+    esac
+done
+chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
+chmod 755 /mnt/usr/share/sddm/themes 2>/dev/null || true
+chmod -R 755 /mnt/usr/share/sddm/themes/aequalyn 2>/dev/null || true
+# The desktop reads /usr/share/aequalyn/lockscreens.enabled with a watching
+# FileView; a mode-700 directory makes that fail with "Permission denied".
+chmod 755 /mnt/usr/share/aequalyn /mnt/etc/aequalyn 2>/dev/null || true
+[[ -e /mnt/usr/share/aequalyn/lockscreens.enabled ]] \
+    && chmod 644 /mnt/usr/share/aequalyn/lockscreens.enabled 2>/dev/null || true
+# Re-assert here as well: later steps can recreate a cache/db dir under a
+# restrictive umask, and an unreadable local db breaks pacman for users.
+for d in /mnt/var/lib/pacman /mnt/var/lib/pacman/local /mnt/var/lib/pacman/sync \
+         /mnt/var/cache/pacman /mnt/var/cache/pacman/pkg; do
+    [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
+done
 # ---------------------------------------------------------- cleanup ----------
 cp "$LOGFILE" /mnt/var/log/aequalyn-install.log 2>/dev/null || true
 umount -R /mnt 2>/dev/null || true
