@@ -787,6 +787,22 @@ GID_T=$(arch-chroot /mnt id -g "$USERNAME" 2>/dev/null || awk -F: -v u="$USERNAM
 mkdir -p "/mnt/home/$USERNAME"
 AEQUALYN_SEED_WEBAPPS="$SEED_WEBAPPS" AEQUALYN_WEBAPP_BROWSER="$BROWSER" \
     bash "$AEQUALYN_ROOT/install.sh" --target "/mnt/home/$USERNAME" --owner "$UID_T:$GID_T"
+# The supervisor is the shell's own command, not one in bin/. A fresh install
+# must not depend on which install.sh happens to be bundled on the ISO: older
+# ones copied the shell with stripped modes and never linked the watchdog (or
+# linked it to /mnt/home/... which is gone after the reboot). Do both here,
+# with a relative link that survives the chroot, whatever install.sh did.
+WD_REL=".config/quickshell/tools/watchdog/aequalyn-watchdog"
+WD_ABS="/mnt/home/$USERNAME/$WD_REL"
+if [[ -f "$WD_ABS" ]]; then
+    chmod 755 "$WD_ABS"
+    mkdir -p "/mnt/home/$USERNAME/.local/bin"
+    ln -sfn "../../$WD_REL" "/mnt/home/$USERNAME/.local/bin/aequalyn-watchdog"
+    chown -h "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/bin/aequalyn-watchdog" 2>/dev/null || true
+    ok "watchdog supervisor linked on PATH"
+else
+    warn "watchdog supervisor missing from the shell tree; the desktop will be unsupervised"
+fi
 # The Quickshell lock plugin will not lock without its root-owned PAM services.
 # Fresh installs stamp the migrations that would install them as done below, so
 # call the one-shot helper directly inside the target. SUDO_USER tells it whose

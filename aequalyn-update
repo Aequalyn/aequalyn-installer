@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# aequalyn-update -- bring this machine up to the newest Aequalyn on GitHub.
+#
+#   aequalyn-update            get the newest Aequalyn and its shell, re-apply them to
+#                              your home and restart the shell
+#   aequalyn-update --no-pull  re-apply what is already here, without GitHub
+#
+# Run it as yourself, not as root: it asks for your password for the two system copies
+# (/usr/share/aequalyn and the shell inside it, shell/), which belong to root.
+#
+# Your settings stay as they are. install.sh keeps everything you changed (settings,
+# layouts, docks, default apps, terminal and GTK preferences, colours, wallpaper and
+# theme) and first saves a copy in ~/.local/state/aequalyn/backups.
+#
+# It lives in Aequalyn's bin/, so every update also brings the newest updater.
+# AEQUALYN_ROOT, AEQUALYN_BIN_DIR and AEQUALYN_GIT point it elsewhere, for testing.
+set -Eeuo pipefail
+
+# Everything below is one function, called on the last line together with `exit`: bash
+# has then read the whole script before it runs any of it. An update replaces this very
+# file (in /usr/local/bin and ~/.local/bin); read line by line, the rest would come
+# from the new file, half way through it ("syntax error near unexpected token").
+# The commands are also swapped in as new files (a rename), so a running copy is never
+# changed under it.
+main() {
+    DO_PULL=1
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-pull) DO_PULL=0; shift ;;
+            -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+            *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
+        esac
+    done
+
+    AQ_ROOT=${AEQUALYN_ROOT:-/usr/share/aequalyn}
+    SHELL_DIR="$AQ_ROOT/shell"
+    BIN_DIR=${AEQUALYN_BIN_DIR:-/usr/local/bin}
+    AEQUALYN_GIT=${AEQUALYN_GIT:-https://github.com/Aequalyn}
+    SYSTEM_URL="$AEQUALYN_GIT/aequalyn.git"
+    SHELL_URL="$AEQUALYN_GIT/aequalyn-shell.git"
+
+    [[ -d "$AQ_ROOT" ]] || { echo "aequalyn-update: $AQ_ROOT not found" >&2; exit 1; }
+
+    SUDO=""
+    [[ $EUID -ne 0 ]] && SUDO=sudo
+
+    # Say where it stopped: a failed step leaves everything after it as it was.
+    step="starting"
+    trap 'echo; echo "aequalyn-update: stopped while $step." >&2; echo "Nothing after that step was changed; your settings are as they were." >&2' ERR
+
+    # git in a root-owned clone. safe.directory is given per command, so git's global
+    # config isn't touched (it used to grow by a line on every update).
+    g() { local dir=$1; shift; $SUDO git -c safe.directory="$dir" -C "$dir" "$@"; }
+
+    # Puts the newest main from GitHub in place in a root-owned clone. A fetch and a hard
+    # reset, not a pull: it can't stop half way on a merge, and works even if the history
+    # on GitHub was rewritten. Untracked files (the system tree's shell/) are left alone.
+    sync_clone() { # <dir> <url> <what>
+        local dir=$1 url=$2 what=$3
+        step="downloading the newest $what"
+        g "$dir" fetch -q --depth 1 "$url" main
+        step="putting the newest $what in place"
+        g "$dir" checkout -q -f -B main FETCH_HEAD
+        g "$dir" reset -q --hard FETCH_HEAD
+    }
+
+    if [[ $DO_PULL -eq 1 ]]; then
+        if [[ ! -d "$AQ_ROOT/.git" ]]; then
+            echo "aequalyn-update: $AQ_ROOT is not a git clone, so it can't be updated from GitHub." >&2
+            echo "  Re-install Aequalyn, or make it one:" >&2
+            echo "  sudo git init $AQ_ROOT && sudo git -C $AQ_ROOT remote add origin $SYSTEM_URL" >&2
+            exit 1
+        fi
+        echo "==> getting the newest Aequalyn"
+        sync_clone "$AQ_ROOT" "$SYSTEM_URL" "Aequalyn"
+
+        echo "==> getting the newest shell"
+        if [[ -d "$SHELL_DIR/.git" ]]; then
+            sync_clone "$SHELL_DIR" "$SHELL_URL" "shell"
+        else
+            # an old bundled copy: replaced by a clone, swapped in only once it is complete
+            step="downloading the shell"
+            $SUDO rm -rf "$SHELL_DIR.new"
+            $SUDO git clone -q --depth 1 "$SHELL_URL" "$SHELL_DIR.new"
+            step="putting the shell in place"
+            $SUDO rm -rf "$SHELL_DIR"
+            $SUDO mv "$SHELL_DIR.new" "$SHELL_DIR"
+        fi
+    fi
+
+    echo "==> re-applying Aequalyn to $HOME (your settings stay as they are)"
+    step="re-applying Aequalyn to your home"
+    AEQUALYN_SHELL_DIR="$SHELL_DIR" bash "$AQ_ROOT/install.sh" --target "$HOME" --skip-hypr
+
+    # install.sh in an older /usr/share/aequalyn may predate the watchdog
+    # entirely: it copies the new shell but leaves the supervisor non-executable
+    # and off PATH, so the shell keeps running unsupervised. Make sure the
+    # command is always runnable after an update, regardless of that version.
+    step="checking the watchdog supervisor"
+    WD="$HOME/.config/quickshell/tools/watchdog/aequalyn-watchdog"
+    if [[ -f "$WD" ]]; then
+        chmod 755 "$WD" 2>/dev/null || true
+        mkdir -p "$HOME/.local/bin"
+        ln -sfn ../../.config/quickshell/tools/watchdog/aequalyn-watchdog "$HOME/.local/bin/aequalyn-watchdog"
+    fi
+
+    echo "==> setting up the agent skills (.agents, .claude, ...)"
+    step="setting up the agent skills"
+    if [[ -x "$AQ_ROOT/bin/aequalyn-provision-user" ]]; then
+        AEQUALYN_PATH="$AQ_ROOT" AEQUALYN_SHELL_DIR="$SHELL_DIR" bash "$AQ_ROOT/bin/aequalyn-provision-user" || true
+    elif command -v aequalyn-provision-user >/dev/null 2>&1; then
+        AEQUALYN_PATH="$AQ_ROOT" AEQUALYN_SHELL_DIR="$SHELL_DIR" aequalyn-provision-user || true
+    fi
+    # The skill folders exist even when no provisioner is there (older installs): link any
+    # skill the shell ships.
+    mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills" "$HOME/.gemini/config/skills" "$HOME/.hermes/skills"
+    SKILLS_SRC=""
+    for base in "$SHELL_DIR" "$SHELL_DIR/default"; do
+        if [[ -d "$base/agents/skills" ]]; then SKILLS_SRC="$base/agents/skills"; break; fi
+    done
+    if [[ -n "$SKILLS_SRC" ]]; then
+        for skill in "$SKILLS_SRC"/*/; do
+            [[ -d "$skill" ]] || continue
+            skill=${skill%/}
+            name=${skill##*/}
+            for d in .agents/skills .claude/skills .codex/skills .pi/agent/skills .gemini/config/skills .hermes/skills; do
+                ln -sfn "$skill" "$HOME/$d/$name"
+            done
+        done
+    fi
+
+    echo "==> refreshing the aequalyn commands in $BIN_DIR"
+    step="refreshing the aequalyn commands"
+    for f in "$AQ_ROOT/bin/"*; do
+        [[ -f "$f" ]] || continue
+        n=$(basename "$f")
+        $SUDO cp -a "$f" "$BIN_DIR/.$n.new"
+        $SUDO mv -f "$BIN_DIR/.$n.new" "$BIN_DIR/$n"
+    done
+    $SUDO chmod 755 "$BIN_DIR"/aequalyn-* 2>/dev/null || true
+
+    echo "==> restarting the shell"
+    step="restarting the shell"
+    if pgrep -x qs >/dev/null 2>&1; then
+        pkill -x qs 2>/dev/null || true
+        for _ in $(seq 1 25); do
+            pgrep -x qs >/dev/null 2>&1 || break
+            sleep 0.2
+        done
+    fi
+    if command -v aequalyn-session-start >/dev/null 2>&1; then
+        aequalyn-session-start >/dev/null 2>&1 || true
+    else
+        QS_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/quickshell"
+        if command -v qs >/dev/null 2>&1; then
+            nohup qs -n -d -p "$QS_CONFIG" >/dev/null 2>&1 &
+            disown
+        fi
+    fi
+
+    echo "==> done: Aequalyn $(g "$AQ_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'), shell $(g "$SHELL_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')."
+    echo "    Your settings are as you left them; a copy is in ~/.local/state/aequalyn/backups."
+}
+
+main "$@"; exit $?
