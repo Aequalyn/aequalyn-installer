@@ -188,12 +188,16 @@ case "$BROWSER" in
     zen)     PKGS+=(chromium); warn "Zen Browser is an AUR package; installed post-boot when online" ;;
     *)       PKGS+=(chromium) ;;
 esac
-# Do not ship two browsers: drop the one that was not selected.
-if [[ "$BROWSER" != "chromium" && "$BROWSER" != "zen" ]]; then
-    PKGS=("${PKGS[@]/chromium/}")
-fi
-if [[ "$BROWSER" != "firefox" ]]; then
-    PKGS=("${PKGS[@]/firefox/}")
+# Do not ship two browsers: the base list's Chromium goes when Firefox was chosen. By its
+# whole name, and never when this source has no Firefox, which would leave no browser.
+if [[ "$BROWSER" == "firefox" ]]; then
+    if [[ $OFFLINE -eq 1 ]] && ! compgen -G "$OFFLINE_REPO/firefox-[0-9]*.pkg.tar.zst" >/dev/null; then
+        warn "Firefox is not in the offline repo: Chromium is installed instead"
+    else
+        KEPT=()
+        for p in "${PKGS[@]}"; do [[ "$p" == chromium ]] || KEPT+=("$p"); done
+        PKGS=("${KEPT[@]}")
+    fi
 fi
 [[ "$FLATPAK" == "true" ]] && PKGS+=(flatpak)
 [[ -n "$EXTRA" ]] && PKGS+=($EXTRA)
