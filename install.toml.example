@@ -47,7 +47,7 @@ kernels          = ["linux"]
 # "auto" = use the bundled offline repo when present, else online.
 source   = "auto"
 # Profiles are cumulative; "minimal" is always included.
-# minimal | student | dev | creative | gaming | ai | service | editor | style | browser | terminal
+# minimal | casual | dev | creative | gaming | student | work | ai
 profiles = ["minimal", "dev"]
 browser  = "chromium"          # chromium | firefox | zen
 flatpak  = false

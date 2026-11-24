@@ -292,10 +292,9 @@ if [[ -z "$CONFIG" ]]; then
     [[ "$encrypt_v" == "yes" ]] && encrypt_v=true || encrypt_v=false
 
     ui_style "Step 4/6 · Packages"
-    profiles_v=$(ui_multi "Select package profiles (space/enter to choose)" \
-        "minimal" "student" "dev" "gaming" "creative" \
-        "ai" "service" "editor" "style" "browser" "terminal")
-    [[ -z "$profiles_v" ]] && profiles_v="minimal"
+    profiles_v=$(ui_multi "Add to the base system (space/enter to choose, or none)" \
+        "casual" "dev" "creative" "gaming" "student" "work" "ai")
+    profiles_v="minimal${profiles_v:+ $profiles_v}"
     browser_v=$(ui_choose "Browser" "chromium" "firefox" "zen")
     flatpak_v=$(ui_choose "Enable Flatpak?" "no" "yes")
     [[ "$flatpak_v" == "yes" ]] && flatpak_v=true || flatpak_v=false

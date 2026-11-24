@@ -88,30 +88,24 @@ Scope {
     property int efiSizeMb: 2048
     onModeChanged: { if (root.mode !== "dualboot") root.chainloadWindows = false; }
 
-    property bool profMinimal: true
-    property bool profStudent: false
+    property bool profCasual: false
     property bool profDev: false
-    property bool profGaming: false
     property bool profCreative: false
+    property bool profGaming: false
+    property bool profStudent: false
+    property bool profWork: false
     property bool profAi: false
-    property bool profService: false
-    property bool profEditor: false
-    property bool profStyle: false
-    property bool profBrowser: false
-    property bool profTerminal: false
 
+    // On top of the base system (the minimal list), which every install has. Any of them
+    // together: what two share is installed once.
     readonly property var profileDefs: [
-        { key: "profMinimal", id: "minimal", title: "Minimal", sub: "The base system: browser, files, terminal" },
-        { key: "profStudent", id: "student", title: "Student", sub: "Study tools" },
-        { key: "profDev", id: "dev", title: "Development", sub: "Languages and developer tools" },
-        { key: "profGaming", id: "gaming", title: "Gaming", sub: "The gaming stack" },
-        { key: "profCreative", id: "creative", title: "Creative", sub: "Media and creative apps" },
-        { key: "profAi", id: "ai", title: "AI", sub: "Local models and runtimes" },
-        { key: "profService", id: "service", title: "Service", sub: "Accounts, chat, sync and remote access" },
-        { key: "profEditor", id: "editor", title: "Editor", sub: "Terminal and graphical editors" },
-        { key: "profStyle", id: "style", title: "Style", sub: "Fonts and looks" },
-        { key: "profBrowser", id: "browser", title: "Browser", sub: "Browser choices" },
-        { key: "profTerminal", id: "terminal", title: "Terminal", sub: "Terminal emulators" }
+        { key: "profCasual", id: "casual", title: "Casual", sub: "Discord, Telegram, VLC, photos, torrents, calculator, clocks, weather" },
+        { key: "profDev", id: "dev", title: "Developer", sub: "Neovim, Helix, Git, Node, Rust, Go, Python, Docker" },
+        { key: "profCreative", id: "creative", title: "Creator", sub: "GIMP, Inkscape, Krita, Blender, Kdenlive, OBS, Audacity" },
+        { key: "profGaming", id: "gaming", title: "Gamer", sub: "Steam, Lutris, Wine, GameMode, MangoHud, Discord" },
+        { key: "profStudent", id: "student", title: "Student", sub: "LibreOffice, Calibre, Xournal++, OBS" },
+        { key: "profWork", id: "work", title: "Work", sub: "LibreOffice, Thunderbird, Bitwarden, Signal, Tailscale, Syncthing" },
+        { key: "profAi", id: "ai", title: "AI", sub: "Ollama, llama.cpp and PyTorch" }
     ]
 
     property string browser: "chromium"
@@ -153,14 +147,12 @@ Scope {
     readonly property bool step0Valid: true
     readonly property bool step1Valid: root.hostname.trim() !== "" && root.username.trim() !== "" && root.timezone.trim() !== "" && root.password !== "" && root.password === root.passwordConfirm
     readonly property bool step2Valid: root.selectedDisk !== ""
-    readonly property bool step3Valid: root.profMinimal || root.profStudent || root.profDev || root.profGaming || root.profCreative
     readonly property bool step4Valid: true
     readonly property int maxAllowedStep: root.locked ? 6 : (root.imported ? 5 :
         (!root.step0Valid ? 0 :
         (!root.step1Valid ? 1 :
         (!root.step2Valid ? 2 :
-        (!root.step3Valid ? 3 :
-        (!root.step4Valid ? 4 : 5))))))
+        (!root.step4Valid ? 4 : 5)))))
 
     // One line in the footer saying what is still missing on the current page,
     // so a disabled Next never reads as a dead button.
@@ -170,8 +162,6 @@ Scope {
             return "Hostname, username, timezone and a matching password are required to continue.";
         if (root.step === 2 && !root.step2Valid)
             return "Select a target disk to continue.";
-        if (root.step === 3 && !root.step3Valid)
-            return "Pick at least one package profile to continue.";
         return "";
     }
     property string statusText: ""
@@ -208,9 +198,7 @@ Scope {
     }
 
     function selectedProfiles() {
-        const out = root.profileDefs.filter(p => root[p.key]).map(p => p.id);
-        if (out.length === 0) out.push("minimal");
-        return out;
+        return ["minimal"].concat(root.profileDefs.filter(p => root[p.key]).map(p => p.id));
     }
 
     function applyImport(d) {
@@ -384,11 +372,7 @@ Scope {
                         root.chainloadWindows = root.mode === "dualboot" &&
                             root.detect.win_efi !== undefined && root.detect.win_efi !== "";
                         const profs = root.detect.profiles || ["minimal"];
-                        root.profMinimal = profs.indexOf("minimal") >= 0;
-                        root.profStudent = profs.indexOf("student") >= 0;
-                        root.profDev = profs.indexOf("dev") >= 0;
-                        root.profGaming = profs.indexOf("gaming") >= 0;
-                        root.profCreative = profs.indexOf("creative") >= 0;
+                        for (const p of root.profileDefs) root[p.key] = profs.indexOf(p.id) >= 0;
                         if (root.detect.browser) root.browser = root.detect.browser;
                         root.flatpak = root.detect.flatpak === true;
                     }
@@ -1207,8 +1191,10 @@ Scope {
                     Rectangle { anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right; height: 1; color: root.border }
                 }
 
-                // ---- the panel: everything of a step, side by side, no scrolling -------
-                StackLayout {
+                // ---- the panel: everything of a step, side by side; it scrolls only where the
+                // window is too low for the step (small screens, large text) -------------
+                Flickable {
+                    id: stepFlick
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.margins: 20
@@ -1219,6 +1205,20 @@ Scope {
                     implicitHeight: 0
                     clip: true
                     visible: root.page === "install"
+                    contentWidth: width
+                    contentHeight: stepStack.height
+                    interactive: contentHeight > height
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: stepFlick.interactive ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff }
+                    Connections {
+                        target: root
+                        function onStepChanged() { stepFlick.contentY = 0 }
+                    }
+                StackLayout {
+                    id: stepStack
+                    readonly property Item page: stepStack.children[stepStack.currentIndex] || null
+                    width: stepFlick.width - (stepFlick.interactive ? 12 : 0)
+                    height: Math.max(stepFlick.height, stepStack.page ? stepStack.page.implicitHeight : 0)
                     currentIndex: root.step
 
                     // 0 Welcome
@@ -1495,24 +1495,24 @@ Scope {
                         spacing: 20
                         Group {
                             title: "Profiles"
-                            hint: "What comes installed. Choose one or more; at least one stays on."
+                            hint: "The base system is always there: Chromium, Files, a terminal. Minimal leaves it at that; the others add to it, any of them together."
                             Layout.preferredWidth: 1
                             Layout.alignment: Qt.AlignTop
+                            ToggleRow {
+                                first: true
+                                title: "Minimal"
+                                sub: "The base system and nothing more"
+                                checked: root.selectedProfiles().length === 1
+                                onToggled: v => { if (v) for (const p of root.profileDefs) root[p.key] = false; }
+                            }
                             Repeater {
                                 model: root.profileDefs
                                 delegate: ToggleRow {
                                     required property var modelData
-                                    required property int index
-                                    first: index === 0
                                     title: modelData.title
                                     sub: modelData.sub
                                     checked: root[modelData.key]
-                                    onToggled: v => {
-                                        // the last profile on stays on
-                                        const others = root.profileDefs.map(p => p.key).filter(k => k !== modelData.key);
-                                        if (!v && !others.some(k => root[k])) return;
-                                        root[modelData.key] = v;
-                                    }
+                                    onToggled: v => root[modelData.key] = v
                                 }
                             }
                         }
@@ -1552,6 +1552,16 @@ Scope {
                                         onChosen: key => root.editor = key
                                     }
                                 }
+                            }
+                            Text {
+                                text: "The ISO bundles the base system only: what these profiles add needs the internet, and an offline install leaves it out."
+                                color: root.warn
+                                visible: root.selectedProfiles().length > 1
+                                    && (root.source === "offline" || (!root.netChecking && !root.online))
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 2
                             }
                             Text {
                                 text: "No internet connection: the bundled offline repository is proposed, and an Online source would fail to download packages."
@@ -1892,6 +1902,7 @@ Scope {
                             Text { text: "Log: " + root.logFile; color: root.textMuted; font.pixelSize: 11; font.family: "monospace"; elide: Text.ElideLeft; Layout.maximumWidth: 520 }
                         }
                     }
+                }
                 }
 
                 // ---- the start page: install, repair or read the manual -----------------
