@@ -392,6 +392,7 @@ pacstrap -C "$PACMAN_CONF" /mnt "${PKGS[@]}"
 genfstab -U /mnt >> /mnt/etc/fstab
 ok "base system installed"
 
+# Fix directory permissions: pacstrap may inherit a restrictive umask from the
 # live environment, leaving /, /etc, /var, /home, /boot unreadable by non-root
 # users (dbus, sddm, systemd services). That breaks D-Bus and SDDM autologin.
 chmod 755 /mnt 2>/dev/null || true
@@ -411,7 +412,153 @@ chmod 700 /mnt/root 2>/dev/null || true
 for d in /mnt/var/lib/pacman /mnt/var/lib/pacman/local /mnt/var/lib/pacman/sync \
          /mnt/var/cache/pacman /mnt/var/cache/pacman/pkg; do
     [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
-donecat > /etc/pacman.conf <<'PAC'
+done
+
+if [[ "$ENCRYPT" == "true" ]]; then
+    printf 'aequalyn_root UUID=%s none luks,discard\n' "$LUKS_UUID" >> /mnt/etc/crypttab
+fi
+
+# ---------------------------------------------------------- plymouth ---------
+# The plymouth mkinitcpio hook embeds the default theme and the theme's
+# BOOT_SECONDS, so the theme must be staged before the chroot picks it as
+# default and builds the initramfs. START_BAR_ON_SPLASH follows the install
+# type, and the calibrate helper measures this machine before the image is
+# built.
+info "staging the Aequalyn boot splash ..."
+if [[ -d "$AEQUALYN_ROOT/plymouth/aequalyn" ]]; then
+    install -d -m 0755 /mnt/usr/share/plymouth/themes/aequalyn
+    cp -a "$AEQUALYN_ROOT/plymouth/aequalyn/." /mnt/usr/share/plymouth/themes/aequalyn/
+    # Encrypted installs start the bar at the passphrase answer; plain ones
+    # have no prompt to start from, so the bar runs with the splash instead.
+    if [[ "$ENCRYPT" == "true" ]]; then
+        START_BAR=0
+    else
+        START_BAR=1
+    fi
+    sed -i "s/^START_BAR_ON_SPLASH = .*/START_BAR_ON_SPLASH = $START_BAR;/" \
+        /mnt/usr/share/plymouth/themes/aequalyn/aequalyn.script
+else
+    warn "plymouth/aequalyn missing from the source tree; the target gets no splash"
+fi
+if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-plymouth-calibrate" ]]; then
+    install -Dm 0755 "$AEQUALYN_ROOT/bin/aequalyn-plymouth-calibrate" \
+        /mnt/usr/local/bin/aequalyn-plymouth-calibrate
+fi
+if [[ $OFFLINE -eq 1 ]]; then
+    # Keep the offline pacman.conf for reproducibility, but do not copy the
+    # multi-gigabyte repo into the installed system -- it has online mirrors.
+    cp "$PACMAN_CONF" /mnt/etc/pacman-offline.conf
+fi
+
+# Pre-built AUR packages (Limine snapshot stack) baked into the ISO's offline
+# repo: stage them in the target so the chroot can install them with pacman -U,
+# giving offline installs working snapshot boot entries. They are installed
+# after mkinitcpio so their hooks reuse the finished initramfs.
+mkdir -p /mnt/var/cache/aequalyn-aur
+AUR_BAKED=0
+for p in limine-mkinitcpio-hook limine-snapper-sync; do
+    for f in "$OFFLINE_REPO/$p"-*.pkg.tar.zst; do
+        [[ -f "$f" ]] || continue
+        cp -f "$f" /mnt/var/cache/aequalyn-aur/
+        AUR_BAKED=1
+    done
+done
+(( AUR_BAKED )) && ok "staged Limine snapshot packages for the chroot" \
+    || info "Limine snapshot packages will be built from AUR on first boot"
+
+# Aequalyn's own packages (packages/local.packages: mpvpaper, ddwriter, nudu) are
+# not in the Arch repositories: the ISO carries them prebuilt in its offline
+# repository, online installs included. Staged here, installed in the chroot.
+mkdir -p /mnt/var/cache/aequalyn-local
+LOCAL_STAGED=0
+if [[ -f "$AEQUALYN_ROOT/packages/local.packages" ]]; then
+    for p in $(sed -e 's/#.*//' "$AEQUALYN_ROOT/packages/local.packages"); do
+        f=$(compgen -G "$OFFLINE_REPO/$p-[0-9]*.pkg.tar.zst" | sort -V | tail -n1 || true)
+        if [[ -n "$f" ]]; then
+            cp -f "$f" /mnt/var/cache/aequalyn-local/
+            LOCAL_STAGED=$((LOCAL_STAGED + 1))
+        else
+            warn "$p is not in the offline repository; skipping it"
+        fi
+    done
+fi
+(( LOCAL_STAGED )) && ok "staged $LOCAL_STAGED of Aequalyn's own packages for the chroot"
+
+# ---------------------------------------------------------- chroot -----------
+info "configuring system in chroot ..."
+cat > /mnt/setup.sh <<'CHROOT'
+#!/usr/bin/bash
+set -euo pipefail
+trap 'echo "setup.sh: line $LINENO failed: $BASH_COMMAND" >&2' ERR
+source /pwhash.env
+rm -f /pwhash.env
+
+info() { printf '\033[0;34m  INFO\033[0m    %s\n' "$*"; }
+ok()   { printf '\033[0;32m  OK\033[0m      %s\n' "$*"; }
+warn() { printf '\033[1;33m  WARN\033[0m    %s\n' "$*"; }
+
+TIMEZONE="__TIMEZONE__"
+HOSTNAME="__HOSTNAME__"
+KEYMAP="__KEYMAP__"
+USERNAME="__USERNAME__"
+ENCRYPT="__ENCRYPT__"
+EFINUM="__EFINUM__"
+FIRMWARE="__FIRMWARE__"
+DISK="__DISK__"
+CHAINLOAD="__CHAINLOAD__"
+CMDLINE="__CMDLINE__"
+CMDLINE_FB="__CMDLINE_FB__"
+FLATPAK="__FLATPAK__"
+
+ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+hwclock --systohc || true
+printf '%s UTF-8\n' "${LANG_BASE:-en_US}" > /etc/locale.gen
+locale-gen
+printf 'LANG=%s\n' "$LOCALE" > /etc/locale.conf
+printf '%s\n' "$HOSTNAME" > /etc/hostname
+cat > /etc/hosts <<H
+127.0.0.1 localhost
+::1       localhost
+127.0.1.1 $HOSTNAME.localdomain $HOSTNAME
+H
+printf 'KEYMAP=%s\n' "$KEYMAP" > /etc/vconsole.conf
+
+# Aequalyn branding. limine-entry-tool names auto-generated boot entries after
+# PRETTY_NAME, and limine-snapper-sync hangs the snapshot submenu under that
+# name, so keep this in sync with TARGET_OS_NAME below.
+rm -f /etc/os-release
+cat > /usr/lib/os-release <<'OSR'
+NAME="Aequalyn"
+PRETTY_NAME="Aequalyn Linux"
+ID=aequalyn
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://github.com/Aequalyn"
+DOCUMENTATION_URL="https://wiki.archlinux.org"
+SUPPORT_URL="https://github.com/Aequalyn/issues"
+BUG_REPORT_URL="https://github.com/Aequalyn/issues"
+LOGO=archlinux-logo
+OSR
+ln -sf ../usr/lib/os-release /etc/os-release
+
+echo "root:$PWHASH" | chpasswd -e
+useradd -m -G wheel -s /bin/bash "$USERNAME"
+echo "$USERNAME:$PWHASH" | chpasswd -e
+sed -i '/^# %wheel ALL=(ALL:ALL) ALL$/s/^# //' /etc/sudoers
+
+# Raise the pam_faillock retry limit from the default 3 to 10 for the
+# installed user (system-auth is shared by sudo), mirroring
+# increase-lockout-limit.sh.
+sed -i 's|^\(auth\s\+required\s\+pam_faillock.so\)\s\+preauth.*$|\1 preauth silent deny=10 unlock_time=120|' /etc/pam.d/system-auth
+sed -i 's|^\(auth\s\+\[default=die\]\s\+pam_faillock.so\)\s\+authfail.*$|\1 authfail deny=10 unlock_time=120|' /etc/pam.d/system-auth
+if [[ -f /etc/pam.d/sddm-autologin ]]; then
+    sed -i '/pam_faillock\.so preauth/d'  /etc/pam.d/sddm-autologin
+    sed -i '/pam_faillock\.so authsucc/d' /etc/pam.d/sddm-autologin
+    sed -i '/auth.*pam_permit\.so/a auth        required    pam_faillock.so authsucc' /etc/pam.d/sddm-autologin
+fi
+
+cat > /etc/pacman.conf <<'PAC'
 [options]
 HoldPkg = pacman glibc
 Architecture = auto
@@ -682,7 +829,36 @@ LOCK_APPLY="/home/$USERNAME/.local/bin/aequalyn-apply-lock"
 if [[ -x "/mnt$LOCK_APPLY" ]]; then
     arch-chroot /mnt env SUDO_USER="$USERNAME" "$LOCK_APPLY" >/dev/null 2>&1 \
         || warn "could not install Aequalyn lock PAM stacks; run: sudo ~/.local/bin/aequalyn-apply-lock"
-ficp -r "$AEQUALYN_ROOT/." /mnt/usr/share/aequalyn/
+fi
+# install.sh sees the live-ISO mount path; rewrite it for the installed system.
+# Start on the Aequalyn theme's night wallpaper when the tree ships it (it lands
+# in /usr/share/aequalyn just below), else on the sample one.
+if [[ -f "$AEQUALYN_ROOT/themes/aequalyn/backgrounds/1-night-aequalyn.jpg" ]]; then
+    printf '%s' /usr/share/aequalyn/themes/aequalyn/backgrounds/1-night-aequalyn.jpg
+else
+    printf '/home/%s/Pictures/Wallpapers/beach.jpg' "$USERNAME"
+fi > "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
+if [[ -f "$AEQUALYN_ROOT/themes/aequalyn/theme.json" ]]; then
+    printf 'theme:aequalyn' > "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
+    chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
+fi
+chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
+ 
+# Make sure the installed user actually has the shipped themes (light and dark
+# variants included) available, and that the active theme link points at the
+# one this install starts on.
+if [[ -d "$AEQUALYN_ROOT/themes" ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.local/share/aequalyn/themes"
+    cp -r "$AEQUALYN_ROOT/themes/." "/mnt/home/$USERNAME/.local/share/aequalyn/themes/"
+    chown -R "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/share/aequalyn/themes" 2>/dev/null || true
+    mkdir -p "/mnt/home/$USERNAME/.config/aequalyn/current"
+    ln -sfn /usr/share/aequalyn/themes/aequalyn "/mnt/home/$USERNAME/.config/aequalyn/current/theme"
+    chown -h "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/aequalyn/current/theme" 2>/dev/null || true
+fi
+ 
+mkdir -p /mnt/usr/share/aequalyn /mnt/etc/aequalyn
+chmod 755 /mnt/usr/share/aequalyn /mnt/etc/aequalyn 2>/dev/null || true
+cp -r "$AEQUALYN_ROOT/." /mnt/usr/share/aequalyn/
 # Make /usr/share/aequalyn a git repo tracking GitHub so aequalyn-update can
 # pull updates later. remote add is local (no network), so offline installs
 # still work; aequalyn-update fetches when the user runs it online.
@@ -706,6 +882,41 @@ if [[ -d "$AEQUALYN_ROOT/migrations" ]]; then
         grep -qx "$name" "$MIGRATIONS_DONE" 2>/dev/null || printf '%s\n' "$name" >> "$MIGRATIONS_DONE"
     done
 fi
+
+# Console apps shipped on every install (btop, nudu) need a launcher entry
+# that opens them in a terminal: their packages' own .desktop files either
+# assume Terminal=true (btop) or are too old, so plant Aequalyn's versions
+# that go through xdg-terminal-exec (foot/kitty/alacritty/ghostty, ...).
+mkdir -p /mnt/usr/share/applications
+cat > /mnt/usr/share/applications/btop.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=btop++
+GenericName=System Monitor
+Comment=Resource monitor that shows usage and stats for processor, memory, disks, network and processes
+Icon=btop
+Exec=xdg-terminal-exec btop
+Terminal=false
+Categories=System;Monitor;ConsoleOnly;
+Keywords=system;process;task;monitor;btop;
+StartupNotify=false
+DESKTOP
+cat > /mnt/usr/share/applications/nudu.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=nudu
+GenericName=Disk Usage Analyzer
+Comment=See what is using your disk, in the terminal
+Icon=nudu
+Exec=xdg-terminal-exec nudu
+Terminal=false
+Categories=System;Utility;ConsoleOnly;
+Keywords=disk;usage;du;space;storage;
+StartupNotify=false
+DESKTOP
+chmod 644 /mnt/usr/share/applications/btop.desktop /mnt/usr/share/applications/nudu.desktop
+
 # Provision agent skill folders (.agents, .claude, ...) for the new user so AI
 # assistants can load Aequalyn's SKILL.md out of the box. Must run after the
 # tree above has been copied into /usr/share/aequalyn.
@@ -762,21 +973,58 @@ if [[ -d /usr/share/sddm/themes ]]; then
     mkdir -p /mnt/usr/share/sddm/themes
     cp -r /usr/share/sddm/themes/. /mnt/usr/share/sddm/themes/ 2>/dev/null || true
 fi
+# The default SDDM theme ships with Aequalyn (assets/sddm/aequalyn); copy it
+# from the bundled tree as well, so a fresh install always has the theme that
+# /etc/sddm.conf.d/aequalyn-theme.conf points at even when the live image's
+# /usr/share/sddm/themes is missing or incomplete.
+if [[ -d "$AEQUALYN_ROOT/assets/sddm" ]]; then
+    mkdir -p /mnt/usr/share/sddm/themes
+    cp -r "$AEQUALYN_ROOT/assets/sddm/." /mnt/usr/share/sddm/themes/ 2>/dev/null || true
+fi
+# Make sure the default theme is actually present and readable.
+if [[ -d "$AEQUALYN_ROOT/assets/sddm/aequalyn" ]]; then
+    rm -rf /mnt/usr/share/sddm/themes/aequalyn
+    mkdir -p /mnt/usr/share/sddm/themes/aequalyn
+    cp -r "$AEQUALYN_ROOT/assets/sddm/aequalyn/." /mnt/usr/share/sddm/themes/aequalyn/ 2>/dev/null || true
+    chmod -R 755 /mnt/usr/share/sddm/themes/aequalyn 2>/dev/null || true
+fi
+# SDDM theme fonts (qylock themes ship their own).
 if [[ -d /usr/share/fonts/qylock ]]; then
     mkdir -p /mnt/usr/share/fonts/qylock
     cp -r /usr/share/fonts/qylock/. /mnt/usr/share/fonts/qylock/ 2>/dev/null || true
-fi# Plymouth boot splash theme is staged before the chroot, so the initramfs
+fi
+# The default theme's own font.
+if [[ -f "$AEQUALYN_ROOT/assets/sddm/aequalyn/Aequalyn-Regular.ttf" ]]; then
+    mkdir -p /mnt/usr/share/fonts/aequalyn
+    cp -f "$AEQUALYN_ROOT/assets/sddm/aequalyn/Aequalyn-Regular.ttf" /mnt/usr/share/fonts/aequalyn/ 2>/dev/null || true
+    fc-cache -f /mnt/usr/share/fonts 2>/dev/null || true
+fi
+# Plymouth boot splash theme is staged before the chroot, so the initramfs
 # carries it and the calibrated bar; re-copying it here would reset the
 # per-machine BOOT_SECONDS.
 # Default SDDM theme: Aequalyn.
 mkdir -p /mnt/etc/sddm.conf.d
-printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf# Marker for the optional SDDM lock-screen theme pack: the Settings app only
+chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
+printf '[Theme]\nCurrent=aequalyn\n' > /mnt/etc/sddm.conf.d/aequalyn-theme.conf
+chmod 644 /mnt/etc/sddm.conf.d/aequalyn-theme.conf 2>/dev/null || true
+# Marker for the optional SDDM lock-screen theme pack: the Settings app only
 # shows the Lock Screens page when this file exists.
 if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
     mkdir -p /mnt/usr/share/aequalyn
     chmod 755 /mnt/usr/share/aequalyn 2>/dev/null || true
     printf '1\n' > /mnt/usr/share/aequalyn/lockscreens.enabled
-    chmod 644 /mnt/usr/share/aequalyn/lockscreens.enabled 2>/dev/null || truefi
+    chmod 644 /mnt/usr/share/aequalyn/lockscreens.enabled 2>/dev/null || true
+fi
+# The optional floating titlebar plugin: ship it into the new user's home so
+# the deferred load in aequalyn-session-start (and Super + Shift + T) can find
+# it. Fresh installs stamp migration 20261122-1 as done, so it would not run
+# here; copy it outright instead.
+if [[ -f "$AEQUALYN_ROOT/bin/hyprbars.so" ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.local/lib/aequalyn"
+    cp -f "$AEQUALYN_ROOT/bin/hyprbars.so" "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so"
+    chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so" 2>/dev/null || true
+    chmod 755 "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so" 2>/dev/null || true
+fi
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
 # settings.json from [aequalyn] section. Browser theme sync is on for fresh
@@ -798,6 +1046,10 @@ d["appearance"].update(themeMode=sys.argv[2],
                        barOpacity=int(sys.argv[5]),
                        barLeft=left, barCenter=center, barRight=right,
                        pluginOrder=left + center + right)
+# The installed dock pins the file manager, kitty and chromium (the apps that
+# ship on every install). Aequalyn FM's desktop entry is registered above.
+d.setdefault("dock", {})
+d["dock"]["pinned"] = ["aequalyn.fm", "chromium", "kitty"]
 open(p,"w").write(json.dumps(d, indent=2) + "\n")
 PY
 # settings.json above is only the seed. Once docks.json exists it is the
@@ -829,14 +1081,18 @@ for dock in docks:
         changed = True
 if changed:
     open(p, "w").write(json.dumps(d, indent=2) + "\n")
-PY# SDDM: autologin the installed user into the Aequalyn Wayland session. The
+PY
+# SDDM: autologin the installed user into the Aequalyn Wayland session. The
 # live ISO's aequalyn.desktop is not installed on the target; Hyprland's own
 # session file is, so prefer that unless a packaged Aequalyn session exists.
 SDDM_SESSION=hyprland
 [[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn
 mkdir -p /mnt/etc/sddm.conf.d
+chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
 printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$USERNAME" "$SDDM_SESSION" \
     > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf
+chmod 644 /mnt/etc/sddm.conf.d/aequalyn-autologin.conf 2>/dev/null || true
+
 # Enable the display manager in the target so the machine boots straight into
 # the desktop. This must run inside the chroot: running it on the live ISO only
 # touched the live system, leaving fresh installs booting to a console.
@@ -1025,7 +1281,29 @@ chmod 755 /mnt/usr/share/aequalyn /mnt/etc/aequalyn 2>/dev/null || true
 for d in /mnt/var/lib/pacman /mnt/var/lib/pacman/local /mnt/var/lib/pacman/sync \
          /mnt/var/cache/pacman /mnt/var/cache/pacman/pkg; do
     [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
-done# ---------------------------------------------------------- cleanup ----------cp "$LOGFILE" /mnt/var/log/aequalyn-install.log 2>/dev/null || true
+done
+# Same trap as aequalyn-browser-theme itself: the managed-policy dirs for the
+# Chromium-family browsers must be readable by the installed desktop user. A
+# restrictive umask during pacstrap/package install leaves them 0700, so the
+# 0644 color.json is unreachable and every theme change re-asks for the gate.
+for d in /mnt/etc/opt /mnt/etc/chromium /mnt/etc/brave /mnt/etc/vivaldi \
+         /mnt/etc/yandex-browser; do
+    [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
+done
+for d in /mnt/etc/opt/* /mnt/etc/chromium/* /mnt/etc/brave/* /mnt/etc/vivaldi/* \
+         /mnt/etc/yandex-browser/*; do
+    [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
+done
+for d in /mnt/etc/opt/*/policies/managed /mnt/etc/chromium/policies/managed \
+         /mnt/etc/brave/policies/managed /mnt/etc/vivaldi/policies/managed \
+         /mnt/etc/yandex-browser/policies/managed; do
+    [[ -d $d ]] || continue
+    chmod 755 "$d" 2>/dev/null || true
+    [[ -f $d/color.json ]] && chmod 644 "$d/color.json" 2>/dev/null || true
+done
+
+# ---------------------------------------------------------- cleanup ----------
+cp "$LOGFILE" /mnt/var/log/aequalyn-install.log 2>/dev/null || true
 umount -R /mnt 2>/dev/null || true
 if [[ "$ENCRYPT" == "true" ]]; then cryptsetup close aequalyn_root 2>/dev/null || true; fi
 ok "filesystems unmounted"

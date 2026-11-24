@@ -103,6 +103,7 @@ main() {
         mkdir -p "$HOME/.local/bin"
         ln -sfn ../../.config/quickshell/tools/watchdog/aequalyn-watchdog "$HOME/.local/bin/aequalyn-watchdog"
     fi
+
     echo "==> setting up the agent skills (.agents, .claude, ...)"
     step="setting up the agent skills"
     if [[ -x "$AQ_ROOT/bin/aequalyn-provision-user" ]]; then

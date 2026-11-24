@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# aequalyn-install -- launch the QML installer.
+#
+# Interactive runs use the Quickshell-based UI in this directory. The legacy
+# command-line flags are delegated to aequalyn-install-cli for unattended,
+# repair and detection workflows; --test runs the scripted UI self-test in
+# tests/ against mock scripts, so nothing touches a disk.
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AEQUALYN_INSTALLER_DIR="$SELF_DIR"
+export AEQUALYN_INSTALLER_DIR
+
+# Scripted UI self-test: mock detect/apply, a window that pops up and drives
+# itself through Install -> Failure -> Retry -> Success. See tests/e2e.sh.
+for arg in "$@"; do
+    case "$arg" in
+        --test)
+            exec bash "$SELF_DIR/tests/e2e.sh"
+            ;;
+    esac
+done
+
+# The root gate's half. The watchdog starts this as root (the approval window
+# named it, the password fed sudo on a pipe); sudo reset the environment, so
+# the Wayland socket this session draws on is re-found through the staged
+# file -- validated strictly (a wayland-N name with a real socket behind it),
+# never trusted. Then the wizard starts as root on that display, exactly the
+# way `sudo -E` used to start it when the live ISO still had passwordless
+# sudo.
+if [[ "${1:-}" == "--gate" ]]; then
+    [[ ${EUID} -eq 0 ]] || { echo "aequalyn-install: --gate needs root" >&2; exit 1; }
+    user="${SUDO_USER:-}"
+    [[ -n $user ]] || { echo "aequalyn-install: no SUDO_USER: not started by the gate" >&2; exit 1; }
+    uid=$(id -u "$user") || exit 1
+    home=$(getent passwd "$user" | cut -d: -f6)
+    stage="$home/.local/state/aequalyn/gate/install.json"
+    wayland=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("wayland",""))' "$stage" 2>/dev/null || true)
+    rm -f "$stage"
+    [[ $wayland =~ ^wayland-[0-9]+$ ]] || { echo "aequalyn-install: staged Wayland socket is missing or invalid" >&2; exit 1; }
+    [[ -S "/run/user/$uid/$wayland" ]] || { echo "aequalyn-install: no such Wayland socket for $user" >&2; exit 1; }
+    export XDG_RUNTIME_DIR="/run/user/$uid"
+    export WAYLAND_DISPLAY="$wayland"
+    export XDG_SESSION_TYPE=wayland
+    exec bash "$SELF_DIR/aequalyn-install"
+fi
+
+# Delegate non-interactive / special modes to the CLI backend.
+for arg in "$@"; do
+    case "$arg" in
+        --config|--repair|--detect|--dry-run|-h|--help)
+            exec bash "$SELF_DIR/aequalyn-install-cli" "$@"
+            ;;
+    esac
+done
+
+# Recover the graphical session env when invoked via plain sudo (which drops it).
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+    for rd in /run/user/*/; do
+        [[ -d "$rd" ]] || continue
+        for sock in "$rd"wayland-*; do
+            [[ -S "$sock" ]] || continue
+            export XDG_RUNTIME_DIR="${rd%/}"
+            export WAYLAND_DISPLAY="${sock##*/}"
+            break 2
+        done
+    done
+fi
+if [[ -z "${DISPLAY:-}" ]]; then
+    for d in /tmp/.X11-unix/X*; do
+        [[ -S "$d" ]] || continue
+        export DISPLAY=":${d##*X}"
+        break
+    done
+fi
+
+# Graphical installer.
+if command -v quickshell >/dev/null 2>&1; then
+    exec quickshell -p "$SELF_DIR/shell.qml" "$@"
+elif command -v qs >/dev/null 2>&1; then
+    exec qs -p "$SELF_DIR/shell.qml" "$@"
+else
+    printf 'quickshell not found; falling back to CLI installer\n' >&2
+    exec bash "$SELF_DIR/aequalyn-install-cli" "$@"
+fi
