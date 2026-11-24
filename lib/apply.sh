@@ -997,6 +997,7 @@ fi
 if [[ -f "$AEQUALYN_ROOT/assets/sddm/aequalyn/Aequalyn-Regular.ttf" ]]; then
     mkdir -p /mnt/usr/share/fonts/aequalyn
     cp -f "$AEQUALYN_ROOT/assets/sddm/aequalyn/Aequalyn-Regular.ttf" /mnt/usr/share/fonts/aequalyn/ 2>/dev/null || true
+    cp -f "$AEQUALYN_ROOT/assets/fonts/"*.ttf /mnt/usr/share/fonts/aequalyn/ 2>/dev/null || true
     fc-cache -f /mnt/usr/share/fonts 2>/dev/null || true
 fi
 # Plymouth boot splash theme is staged before the chroot, so the initramfs
