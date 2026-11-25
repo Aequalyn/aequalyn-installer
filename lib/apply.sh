@@ -1074,16 +1074,9 @@ if [[ "${AEQUALYN_INSTALL_LOCKSCREENS:-0}" == "1" ]]; then
     printf '1\n' > /mnt/usr/share/aequalyn/lockscreens.enabled
     chmod 644 /mnt/usr/share/aequalyn/lockscreens.enabled 2>/dev/null || true
 fi
-# The optional floating titlebar plugin: ship it into the new user's home so
-# the deferred load in aequalyn-session-start (and Super + Shift + T) can find
-# it. Fresh installs stamp migration 20261122-1 as done, so it would not run
-# here; copy it outright instead.
-if [[ -f "$AEQUALYN_ROOT/bin/hyprbars.so" ]]; then
-    mkdir -p "/mnt/home/$USERNAME/.local/lib/aequalyn"
-    cp -f "$AEQUALYN_ROOT/bin/hyprbars.so" "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so"
-    chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so" 2>/dev/null || true
-    chmod 755 "/mnt/home/$USERNAME/.local/lib/aequalyn/hyprbars.so" 2>/dev/null || true
-fi
+# The floating titlebar plugin only loads into the Hyprland it was made for: the one the ISO
+# was made with is in vendor/hyprbars/built (copied with the rest above), and the first login
+# takes it, or makes its own where the install got a newer Hyprland (aequalyn-hyprbars).
 chmod 755 /mnt/usr/local/bin/aequalyn-* 2>/dev/null || true
 
 # settings.json from [aequalyn] section. Browser theme sync is on for fresh
