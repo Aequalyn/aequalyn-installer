@@ -32,11 +32,20 @@ if [[ "${1:-}" == "--gate" ]]; then
     [[ ${EUID} -eq 0 ]] || { echo "aequalyn-install: --gate needs root" >&2; exit 1; }
     user="${SUDO_USER:-}"
     [[ -n $user ]] || { echo "aequalyn-install: no SUDO_USER: not started by the gate" >&2; exit 1; }
+    pgrep -u 0 -f '^([^ ]*/)?(quickshell|qs) -p [^ ]*installer/shell\.qml' >/dev/null && { echo "aequalyn-install: the installer is already open" >&2; exit 1; }
     uid=$(id -u "$user") || exit 1
     home=$(getent passwd "$user" | cut -d: -f6)
     stage="$home/.local/state/aequalyn/gate/install.json"
     wayland=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("wayland",""))' "$stage" 2>/dev/null || true)
     rm -f "$stage"
+    # nothing usable staged: the one display this user has, if it is only one
+    if [[ ! $wayland =~ ^wayland-[0-9]+$ || ! -S "/run/user/$uid/$wayland" ]]; then
+        found=()
+        for sock in "/run/user/$uid"/wayland-*; do
+            [[ -S $sock && ${sock##*/} =~ ^wayland-[0-9]+$ ]] && found+=("${sock##*/}")
+        done
+        [[ ${#found[@]} -eq 1 ]] && wayland=${found[0]}
+    fi
     [[ $wayland =~ ^wayland-[0-9]+$ ]] || { echo "aequalyn-install: staged Wayland socket is missing or invalid" >&2; exit 1; }
     [[ -S "/run/user/$uid/$wayland" ]] || { echo "aequalyn-install: no such Wayland socket for $user" >&2; exit 1; }
     export XDG_RUNTIME_DIR="/run/user/$uid"
