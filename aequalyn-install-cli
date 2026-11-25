@@ -322,9 +322,9 @@ d.setdefault("packages", {}).update(profiles=profiles.split(), browser=browser,
                                     editor=editor)
 d.setdefault("aequalyn", {}).update(
     theme_mode=theme, theme_apps=(apps=="true"),
-    bar_left=["appsmenu", "workspaces"],
-    bar_center=["clock", "media"],
-    bar_right=["network", "bluetooth", "volume", "battery", "tray", "plume", "altscape", "settingsbutton", "power"],
+    bar_left=["appsmenu", "workspaces", "layouts", "network", "atelier"],
+    bar_center=["clock", "calendar", "media", "title", "battery", "volume"],
+    bar_right=["brightness", "cpu", "bluetooth", "temperature", "caffeine", "tray", "screenrecorder", "screenshot", "power", "clipscape", "settingsbutton", "plume", "altscape"],
 )
 def dump(o, indent=""):
     lines=[]

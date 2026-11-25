@@ -4,6 +4,8 @@ SIMULATE="${AEQUALYN_SIMULATE:-false}"
 # Called by aequalyn-install after the user has approved the config. Never asks
 # interactive questions; everything comes from the config + the password arg.
 set -euo pipefail
+# whatever mask this was started under: what it writes is for every user to read
+umask 022
 
 CONFIG=$1
 PASSWORD=$2
@@ -58,7 +60,7 @@ CHAINLOAD_WINDOWS=${BOOT_CHAINLOAD_WINDOWS:-true}
 SOURCE=${PACKAGES_SOURCE:-auto}
 PROFILES=${PACKAGES_PROFILES:-minimal}
 BROWSER=${PACKAGES_BROWSER:-chromium}
-SEED_WEBAPPS=${PACKAGES_SEEDWEBAPPS:-true}
+SEED_WEBAPPS=${PACKAGES_SEED_WEBAPPS:-${PACKAGES_SEEDWEBAPPS:-true}}
 FLATPAK=${PACKAGES_FLATPAK:-false}
 AUR=${PACKAGES_AUR:-false}
 EXTRA=${PACKAGES_EXTRA:-}
@@ -72,9 +74,9 @@ BAR_OPACITY=${AEQUALYN_BAR_OPACITY:-100}
 # emits [aequalyn].bar_left/center/right as space-separated strings; the defaults
 # match the reference layout shipped in config/aequalyn/settings.json so older
 # install.toml files without these keys still install the intended positions.
-BAR_LEFT=${AEQUALYN_BAR_LEFT:-"appsmenu workspaces"}
-BAR_CENTER=${AEQUALYN_BAR_CENTER:-"clock media"}
-BAR_RIGHT=${AEQUALYN_BAR_RIGHT:-"network bluetooth volume battery tray plume altscape settingsbutton power"}
+BAR_LEFT=${AEQUALYN_BAR_LEFT:-"appsmenu workspaces layouts network atelier"}
+BAR_CENTER=${AEQUALYN_BAR_CENTER:-"clock calendar media title battery volume"}
+BAR_RIGHT=${AEQUALYN_BAR_RIGHT:-"brightness cpu bluetooth temperature caffeine tray screenrecorder screenshot power clipscape settingsbutton plume altscape"}
 
 [[ $EUID -eq 0 ]] || abort "must run as root"
 # UEFI is the main target; legacy BIOS (VMs that default to it, such as GNOME
@@ -111,6 +113,19 @@ fi
 # ---------------------------------------------------------- package source ---
 OFFLINE_REPO="/var/cache/offline-repo"
 OFFLINE=0
+# pacstrap copies the live keyring into the new root, and pacman refuses
+# every mirror package while that keyring is missing or untrusted:
+#   error: ... invalid or corrupted package (PGP signature)
+# which reads like a checksum failure. Make sure the Arch keys exist before
+# pacstrap runs; `--init` is idempotent (it only mints the local signing
+# key when none is available) and `--populate` re-imports the keys shipped
+# by archlinux-keyring.
+online_ready() {
+    ping -c 1 -W 2 archlinux.org >/dev/null 2>&1 || { WHY="no internet and no offline repo"; return 1; }
+    info "initialising the pacman keyring ..."
+    pacman-key --init >/dev/null 2>&1 || { WHY="pacman-key --init failed"; return 1; }
+    pacman-key --populate archlinux >/dev/null 2>&1 || { WHY="pacman-key --populate archlinux failed"; return 1; }
+}
 if [[ "$SOURCE" == "offline" || "$SOURCE" == "auto" ]]; then
     [[ -f "$OFFLINE_REPO/offline.db" ]] && OFFLINE=1
 fi
@@ -132,18 +147,7 @@ EOF
     ok "using bundled offline repository"
 else
     PACMAN_CONF="/etc/pacman.conf"
-    ping -c 1 -W 2 archlinux.org >/dev/null 2>&1 || abort "no internet and no offline repo"
-    # pacstrap copies the live keyring into the new root, and pacman refuses
-    # every mirror package while that keyring is missing or untrusted:
-    #   error: ... invalid or corrupted package (PGP signature)
-    # which reads like a checksum failure. Make sure the Arch keys exist before
-    # pacstrap runs; `--init` is idempotent (it only mints the local signing
-    # key when none is available) and `--populate` re-imports the keys shipped
-    # by archlinux-keyring.
-    info "initialising the pacman keyring ..."
-    pacman-key --init >/dev/null 2>&1 || abort "pacman-key --init failed"
-    pacman-key --populate archlinux >/dev/null 2>&1 \
-        || abort "pacman-key --populate archlinux failed"
+    online_ready || abort "$WHY"
     ok "using online Arch mirrors"
 fi
 
@@ -154,6 +158,7 @@ read_list() { # read_list <file> -> package names
 }
 
 PKGS=()
+LATER=()       # chosen, and not to be had now: aequalyn-add-packages gets them later
 PKGS+=($(read_list "$AEQUALYN_ROOT/packages/base.packages"))
 PKGS+=($(read_list "$AEQUALYN_ROOT/packages/desktop.packages"))
 
@@ -182,6 +187,37 @@ for p in $PROFILES; do
     f="$AEQUALYN_ROOT/packages/profiles/$p.packages"
     [[ -f "$f" ]] && PKGS+=($(read_list "$f")) || warn "unknown profile: $p"
 done
+# Steam and Wine draw through the 32-bit Vulkan driver of this machine's card: without it
+# pacman takes the first one there is, for another maker's card.
+if [[ " ${PKGS[*]} " == *" steam "* || " ${PKGS[*]} " == *" wine "* ]]; then
+    PKGS+=(lib32-mesa)
+    case "$GPU_PKGS" in
+        *nvidia*) PKGS+=(lib32-nvidia-utils) ;;
+        *radeon*) PKGS+=(lib32-vulkan-radeon) ;;
+        *intel*)  PKGS+=(lib32-vulkan-intel) ;;
+    esac
+fi
+
+# Automatic: the ISO's own packages, unless something was chosen that they do not have (what
+# a profile adds, Firefox) and there is internet to get it from. All of it then comes from the
+# mirrors, so nothing is of two ages.
+in_offline() { compgen -G "$OFFLINE_REPO/$1-[0-9]*.pkg.tar.zst" >/dev/null; }
+if [[ $OFFLINE -eq 1 && "$SOURCE" == "auto" ]]; then
+    NEEDS=()
+    for p in "${PKGS[@]}" $EXTRA $([[ "$BROWSER" == firefox ]] && echo firefox) $([[ "$FLATPAK" == true ]] && echo flatpak); do
+        in_offline "$p" || NEEDS+=("$p")
+    done
+    if (( ${#NEEDS[@]} )); then
+        info "not on the ISO: ${NEEDS[*]}"
+        if online_ready && pacman -Sy >/dev/null 2>&1; then
+            OFFLINE=0
+            PACMAN_CONF="/etc/pacman.conf"
+            ok "using online Arch mirrors, which have all of it"
+        else
+            warn "no usable internet connection: they are added at the first start that has one"
+        fi
+    fi
+fi
 
 case "$BROWSER" in
     firefox) PKGS+=(firefox) ;;
@@ -215,16 +251,28 @@ if [[ $OFFLINE -eq 1 ]]; then
     # Check the bundled package files directly instead.
     FILTERED=()
     for p in $(printf '%s\n' "${PKGS[@]}" | grep -v '^$' | sort -u); do
-        if compgen -G "$OFFLINE_REPO/${p}-[0-9]*.pkg.tar.zst" >/dev/null; then
+        if in_offline "$p"; then
             FILTERED+=("$p")
         else
-            warn "dropping $p (not in offline repo)"
+            LATER+=("$p")
         fi
     done
     PKGS=("${FILTERED[@]}")
 else
-    mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | grep -v '^$' | sort -u)
+    # one name the mirrors do not know (renamed, gone) must not end the whole install
+    FILTERED=()
+    pacman -Sy >/dev/null 2>&1 || abort "the Arch mirrors could not be reached"
+    for p in $(printf '%s\n' "${PKGS[@]}" | grep -v '^$' | sort -u); do
+        if pacman -Sp --print-format '%n' "$p" >/dev/null 2>&1; then
+            FILTERED+=("$p")
+        else
+            warn "$p is not in the Arch repositories"
+            LATER+=("$p")
+        fi
+    done
+    PKGS=("${FILTERED[@]}")
 fi
+(( ${#LATER[@]} )) && warn "added at the first start with internet: ${LATER[*]}"
 ok "packages to install: ${#PKGS[@]}"
 
 # ---------------------------------------------------------- snapshot ---------
@@ -969,6 +1017,12 @@ if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-ai-tool" ]]; then
     cp "$AEQUALYN_ROOT/bin/aequalyn-ai-tool" "/mnt/usr/local/bin/aequalyn-ai-tool"
     chmod 755 "/mnt/usr/local/bin/aequalyn-ai-tool"
 fi
+# The root halves of the desktop's own commands, and what finishes the install later.
+for s in aequalyn-browser-theme aequalyn-store aequalyn-gate-rules aequalyn-add-packages; do
+    [[ -f "$AEQUALYN_ROOT/bin/$s" ]] && install -m 0755 "$AEQUALYN_ROOT/bin/$s" "/mnt/usr/local/bin/$s"
+done
+# No password for what a theme change does as root (the rules name three checked commands).
+arch-chroot /mnt /usr/local/bin/aequalyn-gate-rules || warn "theme changes will ask for the password"
 # SDDM lock-screen themes + helper (live ISO ships a few in /usr/share/sddm/themes).
 if [[ -f "$AEQUALYN_ROOT/bin/aequalyn-sddm" ]]; then
     cp "$AEQUALYN_ROOT/bin/aequalyn-sddm" "/mnt/usr/local/bin/aequalyn-sddm"
@@ -1235,6 +1289,30 @@ WantedBy=graphical.target
 EOF
 arch-chroot /mnt systemctl enable aequalyn-builtin-themes.service >/dev/null 2>&1 || true
 
+# What was chosen and could not be had during the install (a profile's apps, offline).
+if (( ${#LATER[@]} )); then
+    printf '%s\n' "${LATER[@]}" > /mnt/etc/aequalyn/packages.pending
+    chmod 644 /mnt/etc/aequalyn/packages.pending
+    cat > /mnt/etc/systemd/system/aequalyn-packages.service <<'EOF'
+[Unit]
+Description=Aequalyn: the apps chosen in the installer
+After=network-online.target graphical.target aequalyn-pacman-online.service aequalyn-first-boot.service
+Wants=network-online.target
+ConditionPathExists=/etc/aequalyn/packages.pending
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/bin/bash /usr/local/bin/aequalyn-add-packages
+Restart=on-failure
+RestartSec=180
+[Install]
+WantedBy=graphical.target
+EOF
+    arch-chroot /mnt systemctl enable aequalyn-packages.service >/dev/null 2>&1 || true
+    ok "${#LATER[@]} packages are added at the first start with internet"
+fi
+
 # Offline installs ship with SigLevel=Required but an uninitialised keyring and
 # no package database sync. On the first boot that has internet, initialise the
 # keyring, populate the Arch keys and sync the databases, then retire this unit.
@@ -1310,6 +1388,9 @@ for d in /mnt/var/lib/pacman /mnt/var/lib/pacman/local /mnt/var/lib/pacman/sync 
          /mnt/var/cache/pacman /mnt/var/cache/pacman/pkg; do
     [[ -d $d ]] && chmod 755 "$d" 2>/dev/null || true
 done
+# Its version file above all: pacman, run by a user who cannot read it, says the database is of
+# an incorrect version and ends with 255.
+[[ -f /mnt/var/lib/pacman/local/ALPM_DB_VERSION ]] && chmod 644 /mnt/var/lib/pacman/local/ALPM_DB_VERSION 2>/dev/null || true
 # Same trap as aequalyn-browser-theme itself: the managed-policy dirs for the
 # Chromium-family browsers must be readable by the installed desktop user. A
 # restrictive umask during pacstrap/package install leaves them 0700, so the

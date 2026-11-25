@@ -120,10 +120,10 @@ Scope {
     // Top bar layout (widget ids per region, left -> right). These are the
     // reference positions shipped on the ISO; leaving them editable in
     // install.toml lets a reinstall restore a customised bar exactly.
-    // the ISO's bar: the other widgets stay off until turned on in Settings
-    property var barLeft: ["appsmenu", "workspaces"]
-    property var barCenter: ["clock", "media"]
-    property var barRight: ["network", "bluetooth", "volume", "battery", "tray", "plume", "altscape", "settingsbutton", "power"]
+    // every widget, as config/aequalyn/settings.json has them
+    property var barLeft: ["appsmenu", "workspaces", "layouts", "network", "atelier"]
+    property var barCenter: ["clock", "calendar", "media", "title", "battery", "volume"]
+    property var barRight: ["brightness", "cpu", "bluetooth", "temperature", "caffeine", "tray", "screenrecorder", "screenshot", "power", "clipscape", "settingsbutton", "plume", "altscape"]
 
     property bool dryRun: false
     property bool writing: false
@@ -1554,7 +1554,7 @@ Scope {
                                 }
                             }
                             Text {
-                                text: "The ISO bundles the base system only: what these profiles add needs the internet, and an offline install leaves it out."
+                                text: "The ISO bundles the base system only: what these profiles add is downloaded, at the first start with internet."
                                 color: root.warn
                                 visible: root.selectedProfiles().length > 1
                                     && (root.source === "offline" || (!root.netChecking && !root.online))

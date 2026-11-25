@@ -70,8 +70,8 @@ bar_height   = 32
 bar_opacity  = 100
 # Top bar layout: widget ids per region, in display order (left -> right).
 # Defaults to the Aequalyn reference layout when the keys are omitted.
-bar_left     = ["appsmenu", "workspaces"]
-bar_center   = ["clock", "media"]
-bar_right    = ["network", "bluetooth", "volume", "battery", "tray", "plume", "altscape", "settingsbutton", "power"]
+bar_left     = ["appsmenu", "workspaces", "layouts", "network", "atelier"]
+bar_center   = ["clock", "calendar", "media", "title", "battery", "volume"]
+bar_right    = ["brightness", "cpu", "bluetooth", "temperature", "caffeine", "tray", "screenrecorder", "screenshot", "power", "clipscape", "settingsbutton", "plume", "altscape"]
 # Profiles can be exported/imported so a reinstall restores the desktop.
 profile      = "default"
