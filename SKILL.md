@@ -48,6 +48,7 @@ pacstrap, chroot config, Limine, snapper, Aequalyn desktop.
 - `aequalyn-update` — git-sync + re-apply.
 - `lib/apply.sh` — deterministic executor.
 - `install.toml.example` — documented contract.
+- Profiles: `profileDefs` in `Installer.qml`, one list each in aequalyn-pkgs `lists/profiles/`; `minimal` is always in.
 - `tests/e2e.sh`, `tests/mock-apply.sh`, `tests/mock-detect.sh` — offline UI self-test.
 
 ## Connectivity

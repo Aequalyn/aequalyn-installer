@@ -20,6 +20,10 @@ On the live ISO it lives in `/opt/aequalyn/installer` next to the core tree
 and the package lists ([aequalyn-iso](https://github.com/Aequalyn/aequalyn-iso)
 assembles them). Everything works without AI.
 
+The start page offers to install, to repair an installation, or to read the manual.
+
+![](screenshots/00-start.png)
+
 ## The flow, screen by screen
 
 Every screen, rendered from the installer itself (`screenshots/`; the
@@ -28,18 +32,21 @@ identity, timezone and disk values are representative).
 **1-2 · Welcome and Identity** -- the hardware proposal with the
 connectivity verdict and the import row; then hostname, user, keymap,
 password and the timezone globe: drag to rotate, click a station, and
-Ctrl + scroll to zoom it. Every screen fits the window as it is, with no
-scrolling: the whole installer scales to the size of the screen.
+Ctrl + scroll to zoom it. The installer scales to the size of the screen; in a
+window too low for a page, the page scrolls.
 
 | ![](screenshots/01-welcome.png) | ![](screenshots/02-identity.png) |
 
 **3-4 · Disk and Packages** -- the target, the install mode, LUKS2 and the
-ESP size; then profiles, browser, Flatpak and the package source, which
-proposes the bundled offline repository when there is no internet.
+ESP size; then the profiles (minimal, always there, and casual, developer, creator,
+gamer, student, work and AI, any of them together), the browser, the terminal editor,
+the extras (web apps, Flatpak, login screen themes) and the package source, which
+proposes the bundled offline repository when there is no internet. The ISO bundles the
+base system: what the profiles add comes from the internet.
 
 | ![](screenshots/03-disk.png) | ![](screenshots/04-packages.png) |
 
-**5-6 · Aequalyn and Review** -- the colour mode and the GTK theming; then
+**5-6 · Aequalyn and Review** -- the colour mode, the GTK theming and the first bar; then
 the exact `install.toml` about to be applied, with the Install button that
 commits the wizard (the Close installer button never comes back after it).
 
