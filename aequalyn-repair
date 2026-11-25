@@ -10,6 +10,8 @@
 #   aequalyn-repair --mode manual     ... then go straight into a chroot shell
 
 set -euo pipefail
+# whatever mask this was started under: what it writes is for every user to read
+umask 022
 
 # Colors for output
 RED='\033[0;31m'
