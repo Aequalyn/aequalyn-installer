@@ -1212,6 +1212,29 @@ WantedBy=multi-user.target
 EOF
 arch-chroot /mnt systemctl enable aequalyn-first-boot.service >/dev/null 2>&1 || true
 
+# The built-in themes are not on the ISO (which has Aequalyn's own two): the installed
+# system gets them the first time it has internet, quietly, then this unit retires.
+mkdir -p /mnt/etc/aequalyn
+touch /mnt/etc/aequalyn/builtin-themes.pending
+cat > /mnt/etc/systemd/system/aequalyn-builtin-themes.service <<'EOF'
+[Unit]
+Description=Aequalyn built-in themes
+After=network-online.target graphical.target
+Wants=network-online.target
+ConditionPathExists=/etc/aequalyn/builtin-themes.pending
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/bin/bash /usr/share/aequalyn/bin/aequalyn-builtin-themes --fetch
+ExecStartPost=/usr/bin/rm -f /etc/aequalyn/builtin-themes.pending
+Restart=on-failure
+RestartSec=120
+[Install]
+WantedBy=graphical.target
+EOF
+arch-chroot /mnt systemctl enable aequalyn-builtin-themes.service >/dev/null 2>&1 || true
+
 # Offline installs ship with SigLevel=Required but an uninitialised keyring and
 # no package database sync. On the first boot that has internet, initialise the
 # keyring, populate the Arch keys and sync the databases, then retire this unit.
