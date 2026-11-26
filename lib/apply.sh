@@ -1134,14 +1134,20 @@ for dock in docks:
 if changed:
     open(p, "w").write(json.dumps(d, indent=2) + "\n")
 PY
-# SDDM: autologin the installed user into the Aequalyn Wayland session. The
-# live ISO's aequalyn.desktop is not installed on the target; Hyprland's own
-# session file is, so prefer that unless a packaged Aequalyn session exists.
+# SDDM: autologin the installed user into the Aequalyn Wayland session
+# (bin/aequalyn-session): with autologin on, log out starts a fresh desktop
+# without the greeter, and Relogin stays off so a desktop that cannot start
+# lands on the greeter instead of looping. Hyprland's own session file is the
+# fallback when the Aequalyn one is missing.
+if [[ -f "$AEQUALYN_ROOT/assets/wayland-sessions/aequalyn.desktop" ]]; then
+    install -Dm644 "$AEQUALYN_ROOT/assets/wayland-sessions/aequalyn.desktop" \
+        /mnt/usr/share/wayland-sessions/aequalyn.desktop
+fi
 SDDM_SESSION=hyprland
 [[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn
 mkdir -p /mnt/etc/sddm.conf.d
 chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
-printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=true\n' "$USERNAME" "$SDDM_SESSION" \
+printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$USERNAME" "$SDDM_SESSION" \
     > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf
 chmod 644 /mnt/etc/sddm.conf.d/aequalyn-autologin.conf 2>/dev/null || true
 
