@@ -1141,7 +1141,7 @@ SDDM_SESSION=hyprland
 [[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn
 mkdir -p /mnt/etc/sddm.conf.d
 chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
-printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$USERNAME" "$SDDM_SESSION" \
+printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=true\n' "$USERNAME" "$SDDM_SESSION" \
     > /mnt/etc/sddm.conf.d/aequalyn-autologin.conf
 chmod 644 /mnt/etc/sddm.conf.d/aequalyn-autologin.conf 2>/dev/null || true
 
