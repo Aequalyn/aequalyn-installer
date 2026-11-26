@@ -1080,6 +1080,13 @@ Scope {
         title: "Aequalyn Installer"
         visible: true
         Component.onDestruction: root.saveGeom()
+        // Closed from outside (Super+Q, the titlebar's close button): Quickshell
+        // keeps running without a window, so the next launch would say "already
+        // open". Quit the same as the ✕ does; mid-install, bring the window back.
+        onClosed: {
+            if (root.writing || root.applying) Qt.callLater(() => { win.visible = true });
+            else Qt.quit();
+        }
         color: root.bgBase
         implicitWidth: 1280
         implicitHeight: 760
