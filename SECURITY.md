@@ -20,7 +20,9 @@ system. Treat the config and the environment as trusted only when you control th
 - **Weak/unverified package trust.** Offline mode uses `SigLevel = Never`; bundled repo
   and optional AUR builds are not signature-pinned. `aequalyn-update` hard-resets to
   GitHub `FETCH_HEAD` without verification.
-- **Auto-login.** Installed system enables SDDM autologin for the created user.
+- **Auto-login.** Installed system enables SDDM autologin for the created user. On a disk
+  that is not encrypted the session locks itself at once (`aequalyn-session-start`), so
+  turning the machine on does not open the desktop.
 
 ### Medium
 - **Secret handling.** Password hash written to `/mnt/pwhash.env` (default perms);
@@ -39,5 +41,5 @@ system. Treat the config and the environment as trusted only when you control th
 4. Re-enable signature verification for offline repos or document the trust model.
 5. Pass secrets via files (`chmod 600`), not argv; scrub logs.
 6. Restrict environment-derived paths; use absolute, validated locations.
-7. Keep autologin only behind full-disk encryption.
+7. Keep autologin only behind full-disk encryption (without it, the session now locks at once).
 8. Make repair operations dry-run capable where feasible.
