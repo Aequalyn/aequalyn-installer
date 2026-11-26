@@ -1165,7 +1165,7 @@ if ! grep -q 'aequalyn: desktop on tty1' "$BP" 2>/dev/null; then
     cat >> "$BP" <<'EOF'
 
 # aequalyn: desktop on tty1 (fallback when SDDM is not running)
-if [[ -z ${WAYLAND_DISPLAY:-} && ${XDG_VTNR:-0} -eq 1 ]] && command -v aequalyn-desktop >/dev/null; then
+if [[ -z ${WAYLAND_DISPLAY:-} && ${XDG_SESSION_TYPE:-tty} == tty && ${XDG_VTNR:-0} -eq 1 ]] && command -v aequalyn-desktop >/dev/null; then
     aequalyn-desktop
 fi
 EOF
