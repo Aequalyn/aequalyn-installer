@@ -873,6 +873,26 @@ if [[ -f "$WD_ABS" ]]; then
 else
     warn "watchdog supervisor missing from the shell tree; the desktop will be unsupervised"
 fi
+# Same for the enterprise Wi-Fi helper used by Settings -> Wi-Fi. Older ISOs
+# won't have it in bin/, so link it from the installed shell tree here too.
+EAP_REL=".config/quickshell/tools/wifi/aequalyn-wifi-eap"
+EAP_ABS="/mnt/home/$USERNAME/$EAP_REL"
+if [[ -f "$EAP_ABS" ]]; then
+    chmod 755 "$EAP_ABS"
+    mkdir -p "/mnt/home/$USERNAME/.local/bin"
+    ln -sfn "../../$EAP_REL" "/mnt/home/$USERNAME/.local/bin/aequalyn-wifi-eap"
+    chown -h "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/bin/aequalyn-wifi-eap" 2>/dev/null || true
+    ok "enterprise Wi-Fi helper linked on PATH"
+fi
+SPD_REL=".config/quickshell/tools/wifi/aequalyn-wifi-speed"
+SPD_ABS="/mnt/home/$USERNAME/$SPD_REL"
+if [[ -f "$SPD_ABS" ]]; then
+    chmod 755 "$SPD_ABS"
+    mkdir -p "/mnt/home/$USERNAME/.local/bin"
+    ln -sfn "../../$SPD_REL" "/mnt/home/$USERNAME/.local/bin/aequalyn-wifi-speed"
+    chown -h "$UID_T:$GID_T" "/mnt/home/$USERNAME/.local/bin/aequalyn-wifi-speed" 2>/dev/null || true
+    ok "fast.com Wi-Fi speed helper linked on PATH"
+fi
 # The Quickshell lock plugin will not lock without its root-owned PAM services.
 # Fresh installs stamp the migrations that would install them as done below, so
 # call the one-shot helper directly inside the target. SUDO_USER tells it whose
@@ -1021,6 +1041,12 @@ fi
 for s in aequalyn-browser-theme aequalyn-store aequalyn-gate-rules aequalyn-add-packages; do
     [[ -f "$AEQUALYN_ROOT/bin/$s" ]] && install -m 0755 "$AEQUALYN_ROOT/bin/$s" "/mnt/usr/local/bin/$s"
 done
+# The root half of Settings > Wi-Fi > Reveal password is pinned in Plugins.js
+# at an absolute path; its source travels with the shell tree installed above.
+AES_WIFI_SECRETS="/mnt/home/$USERNAME/.config/quickshell/tools/wifi/aequalyn-wifi-secrets"
+if [[ -f "$AES_WIFI_SECRETS" ]]; then
+    install -m 0755 "$AES_WIFI_SECRETS" /mnt/usr/local/bin/aequalyn-wifi-secrets
+fi
 # No password for what a theme change does as root (the rules name three checked commands).
 arch-chroot /mnt /usr/local/bin/aequalyn-gate-rules || warn "theme changes will ask for the password"
 # SDDM lock-screen themes + helper (live ISO ships a few in /usr/share/sddm/themes).
