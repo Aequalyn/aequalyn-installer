@@ -64,6 +64,12 @@ cloud_proposal   = false
 snapshot_before  = true        # btrfs snapshot before any agent-driven change
 
 [aequalyn]
+# Which Wayland runner the installed system opens by default. Both Aequalyn
+# variants, both SDDM session entries and both compositor package sets
+# (including niri and xwayland-satellite) are always installed, so the choice
+# can be changed later at the login screen without reinstalling.
+# "hyprland" | "niri"  (both is accepted and treated as hyprland for autologin)
+compositor   = "hyprland"
 theme_mode   = "wallpaper"     # wallpaper | theme | light
 theme_apps   = true
 bar_height   = 32

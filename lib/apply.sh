@@ -66,6 +66,8 @@ AUR=${PACKAGES_AUR:-false}
 EXTRA=${PACKAGES_EXTRA:-}
 EDITOR=${PACKAGES_EDITOR:-nano}
 SNAPSHOT_BEFORE=${AGENT_SNAPSHOT_BEFORE:-true}
+COMPOSITOR=${AEQUALYN_COMPOSITOR:-hyprland}
+[[ $COMPOSITOR == hyprland || $COMPOSITOR == niri || $COMPOSITOR == both ]] || COMPOSITOR=hyprland
 THEME_MODE=${AEQUALYN_THEME_MODE:-wallpaper}
 THEME_APPS=${AEQUALYN_THEME_APPS:-true}
 BAR_HEIGHT=${AEQUALYN_BAR_HEIGHT:-32}
@@ -160,7 +162,19 @@ read_list() { # read_list <file> -> package names
 PKGS=()
 LATER=()       # chosen, and not to be had now: aequalyn-add-packages gets them later
 PKGS+=($(read_list "$AEQUALYN_ROOT/packages/base.packages"))
-PKGS+=($(read_list "$AEQUALYN_ROOT/packages/desktop.packages"))
+# Common desktop packages, plus BOTH compositor sets. Every install carries
+# both session entries and both shell trees, so a user can switch runners at
+# the greeter on a later boot without reinstalling or missing niri,
+# xwayland-satellite or its portal backends. `compositor` only picks the
+# default session / autologin value. Older bundles without the split lists
+# fall back to the combined desktop.packages.
+if [[ -f "$AEQUALYN_ROOT/packages/desktop-common.packages" ]]; then
+    PKGS+=($(read_list "$AEQUALYN_ROOT/packages/desktop-common.packages"))
+    PKGS+=($(read_list "$AEQUALYN_ROOT/packages/compositor-hyprland.packages"))
+    PKGS+=($(read_list "$AEQUALYN_ROOT/packages/compositor-niri.packages"))
+else
+    PKGS+=($(read_list "$AEQUALYN_ROOT/packages/desktop.packages"))
+fi
 
 # Hardware conditionals (L1 detection, no AI).
 # aequalyn-detect --shell also emits MODE/ENCRYPT/PROFILES/BROWSER/FLATPAK
@@ -911,8 +925,14 @@ else
     printf '/home/%s/Pictures/Wallpapers/beach.jpg' "$USERNAME"
 fi > "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
 if [[ -f "$AEQUALYN_ROOT/themes/aequalyn/theme.json" ]]; then
-    printf 'theme:aequalyn' > "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
-    chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/theme.conf"
+    for _qs in quickshell quickshell-niri; do
+        mkdir -p "/mnt/home/$USERNAME/.config/$_qs/theme-switcher"
+        printf '%s' "$(cat /mnt/home/$USERNAME/.config/quickshell/wallpaper.conf)" \
+            > "/mnt/home/$USERNAME/.config/$_qs/wallpaper.conf"
+        printf 'theme:aequalyn' > "/mnt/home/$USERNAME/.config/$_qs/theme.conf"
+        chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/$_qs/theme.conf" \
+            "/mnt/home/$USERNAME/.config/$_qs/wallpaper.conf"
+    done
 fi
 chown "$UID_T:$GID_T" "/mnt/home/$USERNAME/.config/quickshell/wallpaper.conf"
  
@@ -1165,12 +1185,16 @@ PY
 # without the greeter, and Relogin stays off so a desktop that cannot start
 # lands on the greeter instead of looping. Hyprland's own session file is the
 # fallback when the Aequalyn one is missing.
-if [[ -f "$AEQUALYN_ROOT/assets/wayland-sessions/aequalyn.desktop" ]]; then
-    install -Dm644 "$AEQUALYN_ROOT/assets/wayland-sessions/aequalyn.desktop" \
-        /mnt/usr/share/wayland-sessions/aequalyn.desktop
-fi
+for entry in aequalyn aequalyn-niri; do
+    src=$AEQUALYN_ROOT/assets/wayland-sessions/$entry.desktop
+    [[ -f $src ]] && install -Dm644 "$src" "/mnt/usr/share/wayland-sessions/$entry.desktop"
+done
 SDDM_SESSION=hyprland
-[[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn
+case $COMPOSITOR in
+    niri)     SDDM_SESSION=aequalyn-niri ;;
+    both)     SDDM_SESSION=aequalyn ;;
+    *)        [[ -f /mnt/usr/share/wayland-sessions/aequalyn.desktop ]] && SDDM_SESSION=aequalyn ;;
+esac
 mkdir -p /mnt/etc/sddm.conf.d
 chmod 755 /mnt/etc/sddm.conf.d 2>/dev/null || true
 printf '[Autologin]\nUser=%s\nSession=%s\nRelogin=false\n' "$USERNAME" "$SDDM_SESSION" \
